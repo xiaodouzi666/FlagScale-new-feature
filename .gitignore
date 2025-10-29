@@ -24,3 +24,5 @@ template_funcs.py
 
 # data files
 assets/
+
+.DS_Store
