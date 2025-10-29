@@ -12,12 +12,14 @@ system with the existing FlagScale training infrastructure.
 
 from typing import Optional, Any
 import torch
+import torch.distributed as dist
 
-from flagscale.train.monitor.perf_metrics import (
+from flagscale.train.perf_monitor.perf_metrics import (
     FLOPSMeasurementCallback,
     PerformanceMonitor,
     ModelFLOPSCalculator
 )
+from flagscale.train.perf_monitor.perf_logger import PerfMonitorLogger
 
 
 def setup_performance_monitor(args) -> FLOPSMeasurementCallback:
@@ -37,9 +39,13 @@ def setup_performance_monitor(args) -> FLOPSMeasurementCallback:
     # Create callback
     callback = FLOPSMeasurementCallback(args, log_interval=log_interval)
 
-    # Print initialization message
-    if torch.distributed.get_rank() == 0:
-        print(f"Performance monitor initialized. Logging every {log_interval} iterations.")
+    # Print initialization message (only from rank 0)
+    if not dist.is_initialized() or dist.get_rank() == 0:
+        # Use the monitor's logger if available
+        if hasattr(callback.monitor, 'file_logger'):
+            callback.monitor.file_logger.logger.info(
+                f"Performance monitor initialized. Logging every {log_interval} iterations."
+            )
 
     return callback
 
@@ -163,7 +169,7 @@ def calculate_standalone_flops(args, batch_size: Optional[int] = None) -> dict:
 
     Example usage:
         ```python
-        from flagscale.train.monitor.integration import calculate_standalone_flops
+        from flagscale.train.perf_monitor.integration import calculate_standalone_flops
 
         # Get FLOPS estimate
         flops_info = calculate_standalone_flops(args)

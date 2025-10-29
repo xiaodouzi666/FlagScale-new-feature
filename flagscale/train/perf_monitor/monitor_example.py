@@ -26,12 +26,12 @@ import torch
 import torch.distributed as dist
 
 # Import performance monitoring components
-from flagscale.train.monitor import (
+from flagscale.train.perf_monitor import (
     FLOPSMeasurementCallback,
     PerformanceMonitor,
     ModelFLOPSCalculator
 )
-from flagscale.train.monitor.integration import (
+from flagscale.train.perf_monitor.integration import (
     setup_performance_monitor,
     integrate_with_training_loop,
     calculate_standalone_flops,

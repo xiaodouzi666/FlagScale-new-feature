@@ -6,10 +6,12 @@ from .perf_metrics import (
     PerformanceMonitor,
     TFLOPSMetrics,
 )
+from .perf_logger import PerfMonitorLogger
 
 __all__ = [
     "FLOPSMeasurementCallback",
     "ModelFLOPSCalculator",
     "PerformanceMonitor",
     "TFLOPSMetrics",
+    "PerfMonitorLogger",
 ]

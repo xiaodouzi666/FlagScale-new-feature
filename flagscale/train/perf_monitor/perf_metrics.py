@@ -8,7 +8,8 @@ import numpy as np
 import torch
 import torch.distributed as dist
 
-from flagscale.train.monitor.flops_calculator import FLOPSFormulas
+from flagscale.train.perf_monitor.flops_calculator import FLOPSFormulas
+from flagscale.train.perf_monitor.perf_logger import PerfMonitorLogger
 
 # Try to import get_num_microbatches function
 try:
@@ -75,6 +76,14 @@ class PerformanceMonitor:
 
         # Model FLOPS calculator
         self.flops_calculator = ModelFLOPSCalculator(args)
+
+        # File logger
+        log_dir = getattr(args, 'perf_log_dir', 'logs/perf_monitor')
+        enable_console = getattr(args, 'perf_console_output', False)
+        self.file_logger = PerfMonitorLogger(
+            log_dir=log_dir,
+            enable_console=enable_console
+        )
 
     def start_iteration(self):
         """Mark the start of a training iteration."""
@@ -165,22 +174,23 @@ class PerformanceMonitor:
         """
         metrics = self.calculate_metrics(iteration)
 
-        # Console logging
-        if not torch.distributed.is_initialized() or torch.distributed.get_rank() == 0:
-            print(f"\n{'='*60}")
-            print(f"Performance Metrics at Iteration {iteration}")
-            print(f"{'='*60}")
-            print(f"TFLOPS/GPU:           {metrics.tflops_per_gpu:.2f}")
-            print(f"Total TFLOPS:         {metrics.tflops_total:.2f}")
-            print(f"Avg Step Time:        {metrics.avg_step_time*1000:.2f} ms")
-            print(f"Samples/Second:       {metrics.samples_per_second:.2f}")
-            print(f"Tokens/Second:        {metrics.tokens_per_second:.2f}")
+        # File logging (logger handles rank checking internally)
+        metrics_dict = {
+            'TFLOPS_per_GPU': metrics.tflops_per_gpu,
+            'TFLOPS_total': metrics.tflops_total,
+            'samples_per_sec': metrics.samples_per_second,
+            'tokens_per_sec': metrics.tokens_per_second,
+            'step_time_ms': metrics.avg_step_time * 1000,
+        }
 
-            if self.enable_memory_tracking:
-                print(f"Current Memory:       {self.current_memory_gb:.2f} GB")
-                print(f"Peak Memory:          {self.peak_memory_gb:.2f} GB")
+        if self.enable_memory_tracking:
+            metrics_dict.update({
+                'memory_GB': self.current_memory_gb,
+                'peak_memory_GB': self.peak_memory_gb,
+            })
 
-            print(f"{'='*60}\n")
+        # Log to file
+        self.file_logger.log_metrics(iteration, metrics_dict)
 
         # TensorBoard logging
         if writer is not None:
@@ -515,16 +525,15 @@ class FLOPSMeasurementCallback:
     def on_train_end(self, writer=None, wandb_writer=None):
         """Called at the end of training."""
         # Final metrics calculation and logging
-        if torch.distributed.get_rank() == 0:
-            print("\n" + "="*80)
-            print("FINAL TRAINING PERFORMANCE SUMMARY")
-            print("="*80)
+        metrics = self.monitor.metrics
+        final_stats = {
+            'avg_tflops_per_gpu': metrics.tflops_per_gpu,
+            'avg_tflops_total': metrics.tflops_total,
+            'avg_step_time_ms': metrics.avg_step_time * 1000,
+            'min_step_time_ms': metrics.min_step_time * 1000,
+            'max_step_time_ms': metrics.max_step_time * 1000,
+            'peak_memory_gb': self.monitor.peak_memory_gb,
+        }
 
-            metrics = self.monitor.metrics
-            print(f"Average TFLOPS/GPU:    {metrics.tflops_per_gpu:.2f}")
-            print(f"Total TFLOPS:          {metrics.tflops_total:.2f}")
-            print(f"Average Step Time:     {metrics.avg_step_time*1000:.2f} ms")
-            print(f"Min Step Time:         {metrics.min_step_time*1000:.2f} ms")
-            print(f"Max Step Time:         {metrics.max_step_time*1000:.2f} ms")
-            print(f"Peak Memory Usage:     {self.monitor.peak_memory_gb:.2f} GB")
-            print("="*80 + "\n")
+        # Save final summary to file
+        self.monitor.file_logger.save_summary(final_stats)
