@@ -25,29 +25,40 @@ Performance Monitor 是 FlagScale 的性能监控模块，用于实时跟踪和�
 
 ### 1. 使用官方 run.py 启动（推荐）
 
-#### 方法一：通过命令行参数启用
+#### 方法一：通过命令行参数启用（使用 + 前缀添加新参数）
 
 ```bash
 python run.py \
   --config-path ./examples/aquila/conf \
   --config-name train \
   action=run \
-  train.data.data_path=../pile_wikipedia_demo/pile_wikipedia_demo \
-  train.system.enable_perf_monitor=true \
-  train.system.perf_log_interval=10 \
-  train.system.perf_log_dir=./outputs/logs/perf_monitor
+  train.data.data_path=../data/pile_wikipedia_demo \
+  +train.system.enable_perf_monitor=true \
+  +train.system.perf_log_interval=10 \
+  +train.system.perf_log_dir=./outputs/logs/perf_monitor
+```
+
+或者，如果配置文件已包含默认参数（7b.yaml 已更新），可以直接覆盖：
+
+```bash
+python run.py \
+  --config-path ./examples/aquila/conf \
+  --config-name train \
+  action=run \
+  train.data.data_path=../data/pile_wikipedia_demo \
+  train.system.enable_perf_monitor=true
 ```
 
 #### 方法二：使用预配置文件
 
 ```bash
-# 使用包含性能监控的配置文件
+# 使用包含性能监控的配置文件 (7b_perf.yaml)
 python run.py \
   --config-path ./examples/aquila/conf \
   --config-name train \
-  train=7b_with_perf_monitor \
+  train=7b_perf \
   action=run \
-  train.data.data_path=../pile_wikipedia_demo/pile_wikipedia_demo
+  train.data.data_path=../data/pile_wikipedia_demo
 ```
 
 执行后会生成脚本，手动运行：
@@ -243,10 +254,16 @@ def calculate_new_model_flops(self, batch_size, seq_length, ...):
 
 ## 常见问题
 
+### Q: 遇到 "Key 'enable_perf_monitor' is not in struct" 错误？
+
+A: 这是因为 Hydra 配置系统的 struct 模式限制。解决方法：
+1. **使用 `+` 前缀**：`+train.system.enable_perf_monitor=true`
+2. **使用已更新的配置**：使用 `train=7b_perf` 或确保基础配置包含这些参数
+
 ### Q: 为什么日志文件没有生成？
 
 A: 检查以下几点：
-1. 确保添加了 `--enable-perf-monitor` 参数
+1. 确保添加了 `enable_perf_monitor=true` 参数
 2. 检查日志目录权限
 3. 确认只有 rank 0 进程会写入日志
 

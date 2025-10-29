@@ -4,6 +4,14 @@ system:
   disable_bias_linear: True
   use_flash_attn: True
   use_distributed_optimizer: True
+  # Performance monitoring (disabled by default)
+  enable_perf_monitor: False
+  perf_log_interval: 10
+  perf_log_dir: ./outputs/logs/perf_monitor
+  perf_console_output: False
+  perf_memory_tracking: True
+  perf_breakdown: False
+  perf_max_log_files: 10
   precision:
     fp16: True
     initial_loss_scale: 522893

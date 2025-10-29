@@ -1,0 +1,11 @@
+# Aquila 7B with performance monitoring enabled
+# This is a simple example showing how to enable performance monitoring
+
+defaults:
+  - 7b  # Inherit all settings from 7b.yaml
+
+# Override to enable performance monitoring
+system:
+  enable_perf_monitor: True
+  perf_log_interval: 10
+  perf_console_output: False  # Set to True if you want console output too
