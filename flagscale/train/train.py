@@ -1028,7 +1028,7 @@ def pretrain(
                 mpu.set_virtual_pipeline_model_parallel_rank(i)
                 extra_iterators = build_extra_valid_data_iterators(extra_valid_dataset_provider)
                 extra_valid_data_iterator.append(extra_iterators)
-        elif args.use_dualpipev:
+        elif getattr(args, "use_dualpipev", False):
             extra_valid_data_iterator = []
             for _ in range(2):
                 extra_iterators = build_extra_valid_data_iterators(
@@ -1126,7 +1126,7 @@ def get_model(model_provider_func, model_type=ModelType.encoder_or_decoder, wrap
                 this_model.model_type = model_type
                 this_model.vp_stage = i
                 model.append(this_model)
-        elif args.use_dualpipev:
+        elif getattr(args, "use_dualpipev", False):
             model = []
 
             pre_process, post_process = False, False
@@ -2804,7 +2804,7 @@ def train(
                     mpu.set_virtual_pipeline_model_parallel_rank(i)
                     extra_iterators = build_extra_valid_data_iterators(extra_valid_dataset_provider)
                     extra_valid_data_iterator.append(extra_iterators)
-            elif args.use_dualpipev:
+            elif getattr(args, "use_dualpipev", False):
                 extra_valid_data_iterator = []
                 for _ in range(2):
                     extra_iterators = build_extra_valid_data_iterators(
