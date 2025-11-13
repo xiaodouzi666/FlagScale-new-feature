@@ -2468,6 +2468,8 @@ def train(
 
     num_microbatches = get_num_microbatches()
 
+    # Get TensorBoard and WandB writers for performance monitoring
+    writer = get_tensorboard_writer()
     wandb_writer = get_wandb_writer()
     if wandb_writer and args.wandb_log_model:
         # wandb.watch's log_freg needs to take the accumulated number of microbatches into account
@@ -2669,7 +2671,7 @@ def train(
         ft_integration.on_training_step_end()
 
         # Performance monitor: end iteration
-        perf_monitor_end_iteration(iteration)
+        perf_monitor_end_iteration(iteration, writer, wandb_writer)
 
         if should_checkpoint:
             save_checkpoint_and_time(
@@ -2914,7 +2916,7 @@ def train(
         sys.exit(exit_code)
 
     # Performance monitor: training end
-    perf_monitor_end_training()
+    perf_monitor_end_training(writer, wandb_writer)
 
     return iteration, num_floating_point_operations_so_far
 
