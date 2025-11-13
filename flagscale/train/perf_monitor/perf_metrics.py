@@ -525,7 +525,9 @@ class FLOPSMeasurementCallback:
     def on_train_end(self, writer=None, wandb_writer=None):
         """Called at the end of training."""
         # If we have step data but no logs yet, log the final state
-        if len(self.monitor.step_times) > 0 and len(self.monitor.file_logger.json_data) == 0:
+        if (len(self.monitor.step_times) > 0 and
+            self.monitor.file_logger.enabled and
+            len(self.monitor.file_logger.json_data) == 0):
             # Calculate the last iteration number from step_times length
             final_iteration = len(self.monitor.step_times)
             self.monitor.log_metrics(final_iteration, writer, wandb_writer)
