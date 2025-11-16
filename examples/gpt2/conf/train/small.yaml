@@ -1,10 +1,28 @@
 system:
   tensor_model_parallel_size: 2
   pipeline_model_parallel_size: 8
+  disable_bias_linear: False
+  use_flash_attn: True
+  use_distributed_optimizer: True
+  # Performance monitoring
+  enable_perf_monitor: True
+  perf_log_interval: 5
+  perf_log_dir: ./outputs/logs/perf_monitor
+  perf_console_output: False
+  perf_memory_tracking: True
+  perf_breakdown: False
+  perf_max_log_files: 10
   precision:
     fp16: True
+    initial_loss_scale: 65536
+    min_loss_scale: 1.0
+    attention_softmax_in_fp32: True
+    accumulate_allreduce_grads_in_fp32: True
   logging:
     log_interval: 1
+    tensorboard_log_interval: 1
+    wandb_project: "train-gpt2-small"
+    wandb_exp_name: "train-test-gpt2"
   checkpoint:
     save_interval: 1000
 
@@ -14,16 +32,27 @@ model:
   num_attention_heads: 16
   seq_length: 512
   max_position_embeddings: 512
+  init_method_std: 0.02
+  attention_dropout: 0.0
+  hidden_dropout: 0.0
+  weight_decay: 0.1
+  clip_grad: 1.0
   train_iters: 20
   eval_iters: 0
   eval_interval: 10000
   micro_batch_size: 1
   global_batch_size: 16
+  seed: 1234
 
   optimizer:
+    weight_decay: 0.1
+    adam_beta1: 0.9
+    adam_beta2: 0.95
     lr_scheduler:
       lr: 1.0e-4
       min_lr: 1.0e-5
+      lr_warmup_iters: 500
+      lr_decay_style: cosine
 
 data:
   data_path: ${data_path:./data/pile_wikipedia_demo}
