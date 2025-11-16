@@ -1,0 +1,35 @@
+system:
+  tensor_model_parallel_size: 2
+  pipeline_model_parallel_size: 8
+  precision:
+    fp16: True
+  logging:
+    log_interval: 1
+  checkpoint:
+    save_interval: 1000
+
+model:
+  num_layers: 8
+  hidden_size: 1024
+  num_attention_heads: 16
+  seq_length: 512
+  max_position_embeddings: 512
+  train_iters: 20
+  eval_iters: 0
+  eval_interval: 10000
+  micro_batch_size: 1
+  global_batch_size: 16
+
+  optimizer:
+    lr_scheduler:
+      lr: 1.0e-4
+      min_lr: 1.0e-5
+
+data:
+  data_path: ${data_path:./data/pile_wikipedia_demo}
+  split: 969,30,1
+  tokenizer:
+    tokenizer_type: GPT2BPETokenizer
+    vocab_file: ./examples/gpt2/tokenizer/vocab.json
+    merge_file: ./examples/gpt2/tokenizer/merges.txt
+    vocab_size: 50257
