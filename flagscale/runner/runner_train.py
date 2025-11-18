@@ -230,6 +230,7 @@ def _generate_run_script_train(
     with_test=False,
     root_dir=None,
     enable_monitoring=False,
+    envs=None,
 ):
     system_config = config.train.system
     logging_config = config.train.system.logging
@@ -270,6 +271,10 @@ def _generate_run_script_train(
         f.write(f"cd {root_dir}\n")
         f.write(f"\n")
         f.write(f"export PYTHONPATH={megatron_dir}:{root_dir}:${{PYTHONPATH}}\n")
+        # Export additional environment variables
+        if envs:
+            for k, v in envs.items():
+                f.write(f"export {k}={v}\n")
         f.write(f"\n")
         f.write(f'cmd="{cmd}"\n')
         f.write(f"\n")
@@ -424,11 +429,6 @@ class SSHTrainRunner(RunnerBase):
         cur_envs=None,
         enable_monitoring=True,
     ):
-        export_cmd = []
-
-        for k, v in cur_envs.items():
-            export_cmd += [f"{k}={v}"]
-
         runner_cmd = _get_runner_cmd_train(
             host, master_addr, master_port, nnodes, node_rank, nproc_per_node, self.config
         )
@@ -440,7 +440,7 @@ class SSHTrainRunner(RunnerBase):
             else:
                 self.user_args += ["--hetero-current-device-type", device_type]
 
-        cmd = shlex.join(export_cmd + runner_cmd + [self.user_script] + self.user_args)
+        cmd = shlex.join(runner_cmd + [self.user_script] + self.user_args)
         # update cmd with node_specific_config
         node_specific_config = {}
         if device_type is not None:
@@ -460,6 +460,7 @@ class SSHTrainRunner(RunnerBase):
             with_test=with_test,
             root_dir=node_specific_config.get("build_dir", None),
             enable_monitoring=enable_monitoring,
+            envs=cur_envs,
         )
 
         if host != "localhost":
@@ -869,15 +870,11 @@ class CloudTrainRunner(RunnerBase):
         with_test=False,
         dryrun=False,
     ):
-        export_cmd = []
-        for k, v in self.user_envs.items():
-            export_cmd += [f"{k}={v}"]
-
         runner_cmd = _get_runner_cmd_train(
             host, master_addr, master_port, nnodes, node_rank, nproc_per_node, self.config
         )
 
-        cmd = shlex.join(export_cmd + runner_cmd + [self.user_script] + self.user_args)
+        cmd = shlex.join(runner_cmd + [self.user_script] + self.user_args)
 
         host_run_script_file = _generate_run_script_train(
             self.config,
@@ -887,6 +884,7 @@ class CloudTrainRunner(RunnerBase):
             background=False,
             with_test=with_test,
             enable_monitoring=enable_monitoring,
+            envs=self.user_envs,
         )
 
         run_local_command(f"bash {host_run_script_file}", dryrun)
