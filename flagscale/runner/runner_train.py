@@ -141,6 +141,7 @@ def _update_config_train(config: DictConfig):
     scripts_dir = os.path.join(log_dir, "scripts")
     pids_dir = os.path.join(log_dir, "pids")
     details_dir = os.path.join(log_dir, "details")
+    straggler_dir = os.path.join(log_dir, "straggler")
 
     config.checkpoint.save = ckpt_save_dir
     config.checkpoint.load = ckpt_load_dir
@@ -150,6 +151,7 @@ def _update_config_train(config: DictConfig):
     config.logging.details_dir = details_dir
     config.logging.tensorboard_dir = tensorboard_dir
     config.logging.wandb_save_dir = wandb_dir
+    config.logging.straggler_dir = straggler_dir
 
     OmegaConf.set_struct(config, False)
 
@@ -266,6 +268,7 @@ def _generate_run_script_train(
         f.write(f"mkdir -p {system_config.logging.details_dir}\n")
         f.write(f"mkdir -p {system_config.logging.tensorboard_dir}\n")
         f.write(f"mkdir -p {system_config.logging.wandb_save_dir}\n")
+        f.write(f"mkdir -p {system_config.logging.straggler_dir}\n")
         f.write(f"\n")
         f.write(f"cd {root_dir}\n")
         f.write(f"\n")
