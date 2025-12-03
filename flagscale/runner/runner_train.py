@@ -41,7 +41,7 @@ def _get_args_megatron(config: DictConfig):
     new_config_dict.update(config_dict["model"])
     new_config_dict.update(config_dict["data"])
 
-    ignore_keys = ["log_dir", "details_dir", "scripts_dir", "pids_dir"]
+    ignore_keys = ["log_dir", "details_dir", "scripts_dir", "pids_dir", "straggler_dir"]
     # Flatten the dictionary to a list of arguments
     args = flatten_dict_to_args(new_config_dict, ignore_keys)
 
@@ -59,7 +59,7 @@ def _get_args_robotics(config: DictConfig):
 
     new_config_dict = {}
     new_config_dict.update(config_dict["model"])
-    ignore_keys = ["log_dir", "details_dir", "scripts_dir", "pids_dir"]
+    ignore_keys = ["log_dir", "details_dir", "scripts_dir", "pids_dir", "straggler_dir"]
     # Flatten the dictionary to a list of arguments
     args = flatten_dict_to_args(new_config_dict, ignore_keys)
     args = [config_dict["data"]["config_name"]] + args
