@@ -53,6 +53,7 @@ from .heartbeat import (
     RankMonitorClient,
 )
 from .monitor import InProcessMonitor, MonitorEvent, MonitorEventRecord
+from .progress_watchdog import ProgressWatchdog
 from .state import FrozenRankState, HealthStatus, RankMode, RankState
 
 logger = logging.getLogger(__name__)

@@ -197,6 +197,10 @@ def _get_runner_cmd_train(
         del runner_args["master_port"]
     if "enable_monitoring" in runner_args:
         del runner_args["enable_monitoring"]
+    if "enable_in_process_monitoring" in runner_args:
+        del runner_args["enable_in_process_monitoring"]
+    if "in_process" in runner_args:
+        del runner_args["in_process"]
     runner_args["rdzv_id"] = rdzv_id
     # runner_args["master_addr"] = master_addr
     # runner_args["master_port"] = master_port
@@ -230,6 +234,7 @@ def _generate_run_script_train(
     with_test=False,
     root_dir=None,
     enable_monitoring=False,
+    enable_in_process_monitoring=False,
 ):
     system_config = config.train.system
     logging_config = config.train.system.logging
@@ -271,6 +276,25 @@ def _generate_run_script_train(
         f.write(f"\n")
         f.write(f"export PYTHONPATH={root_dir}:{megatron_dir}:${{PYTHONPATH}}\n")
         f.write(f"\n")
+        # In-process monitoring environment variables
+        if enable_in_process_monitoring:
+            f.write(f"# In-process monitoring configuration\n")
+            f.write(f"export FLAGSCALE_IN_PROCESS_MONITORING=1\n")
+            in_process_config = config.experiment.runner.get("in_process", {})
+            if in_process_config.get("heartbeat_interval"):
+                f.write(f"export FLAGSCALE_HEARTBEAT_INTERVAL={in_process_config.heartbeat_interval}\n")
+            if in_process_config.get("health_check_interval"):
+                f.write(f"export FLAGSCALE_HEALTH_CHECK_INTERVAL={in_process_config.health_check_interval}\n")
+            if in_process_config.get("enable_cuda_check") is not None:
+                val = "1" if in_process_config.enable_cuda_check else "0"
+                f.write(f"export FLAGSCALE_ENABLE_CUDA_CHECK={val}\n")
+            if in_process_config.get("enable_nvml_check") is not None:
+                val = "1" if in_process_config.enable_nvml_check else "0"
+                f.write(f"export FLAGSCALE_ENABLE_NVML_CHECK={val}\n")
+            # Set monitor log directory
+            monitor_log_dir = in_process_config.get("log_dir", None) or system_config.logging.log_dir
+            f.write(f"export FLAGSCALE_MONITOR_LOG_DIR={monitor_log_dir}/in_process_monitor\n")
+            f.write(f"\n")
         f.write(f'cmd="{cmd}"\n')
         f.write(f"\n")
         if enable_monitoring:
@@ -360,6 +384,7 @@ def run_node(
     available_port,
     with_test,
     dryrun,
+    enable_in_process_monitoring=False,
 ):
     cur_envs = update_nodes_envs(user_envs, host, resource_info)
     # Get the number of visible devices from the environment variable, e.g. CUDA_VISIBLE_DEVICES, MLU_VISIBLE_DEVICES
@@ -384,6 +409,7 @@ def run_node(
         with_test=with_test,
         dryrun=dryrun,
         cur_envs=cur_envs,
+        enable_in_process_monitoring=enable_in_process_monitoring,
     )
 
 
@@ -424,6 +450,7 @@ class SSHTrainRunner(RunnerBase):
         dryrun=False,
         cur_envs=None,
         enable_monitoring=True,
+        enable_in_process_monitoring=False,
     ):
         export_cmd = []
 
@@ -461,6 +488,7 @@ class SSHTrainRunner(RunnerBase):
             with_test=with_test,
             root_dir=node_specific_config.get("build_dir", None),
             enable_monitoring=enable_monitoring,
+            enable_in_process_monitoring=enable_in_process_monitoring,
         )
 
         if host != "localhost":
@@ -481,11 +509,14 @@ class SSHTrainRunner(RunnerBase):
             run_local_command(f"bash {host_run_script_file}", dryrun)
 
     def run(
-        self, with_test=False, dryrun=False, monitor=False, interval=10, enable_monitoring=None
+        self, with_test=False, dryrun=False, monitor=False, interval=10, enable_monitoring=None,
+        enable_in_process_monitoring=None
     ):
         # Read from config if not explicitly provided
         if enable_monitoring is None:
             enable_monitoring = self.config.experiment.runner.get("enable_monitoring", False)
+        if enable_in_process_monitoring is None:
+            enable_in_process_monitoring = self.config.experiment.runner.get("enable_in_process_monitoring", False)
 
         num_visible_devices = None
         runner_config = self.config.experiment.runner
@@ -515,6 +546,7 @@ class SSHTrainRunner(RunnerBase):
                         available_port,
                         with_test,
                         dryrun,
+                        enable_in_process_monitoring,
                     )
                     tasks.append(args)
                 pool.starmap(run_node, tasks)
@@ -539,6 +571,7 @@ class SSHTrainRunner(RunnerBase):
                 dryrun=dryrun,
                 cur_envs=self.user_envs,
                 enable_monitoring=enable_monitoring,
+                enable_in_process_monitoring=enable_in_process_monitoring,
             )
         # If need monitor, query status continually
         if monitor:

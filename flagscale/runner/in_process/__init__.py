@@ -96,6 +96,12 @@ from .compose import (
     pipeline,
 )
 
+# Progress watchdog (hang detection)
+from .progress_watchdog import (
+    ProgressWatchdog,
+    Timestamp,
+)
+
 # Exceptions
 from .exception import (
     ConfigurationError,
@@ -166,6 +172,9 @@ __all__ = [
     "compose",
     "pipeline",
     "find_common_ancestor",
+    # Progress watchdog
+    "ProgressWatchdog",
+    "Timestamp",
     # Exceptions
     "MonitorError",
     "HealthCheckError",

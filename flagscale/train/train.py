@@ -144,6 +144,17 @@ from megatron.core.msc_utils import MultiStorageClientFeature, open_file
 from flagscale.train.peft.peft import PEFT
 from flagscale.train.peft.lora import LoRA
 
+# FlagScale in-process monitoring (optional)
+try:
+    from flagscale.runner.in_process import init_from_env as init_in_process_monitoring
+    from flagscale.runner.in_process import shutdown_in_process_monitoring, ping as in_process_ping
+    HAS_IN_PROCESS_MONITOR = True
+except ImportError:
+    HAS_IN_PROCESS_MONITOR = False
+    init_in_process_monitoring = None
+    shutdown_in_process_monitoring = None
+    in_process_ping = None
+
 try:
     import flag_gems
     HAVE_GEMS = True
@@ -809,6 +820,13 @@ def pretrain(
     args = get_args()
     if args.use_transformer_engine_fl:
         os.environ['USE_TRANSFORMER_ENGINE_FL'] = "True"
+
+    # Initialize FlagScale in-process monitoring if enabled via environment
+    _in_process_wrapper = None
+    if HAS_IN_PROCESS_MONITOR and init_in_process_monitoring is not None:
+        _in_process_wrapper = init_in_process_monitoring()
+        if _in_process_wrapper is not None:
+            print_rank_0(f"> FlagScale in-process monitoring initialized")
     ###### FlagScale End   ######
 
     if args.log_progress:
@@ -2709,6 +2727,11 @@ def train(
                         cuda_graph_helper.cuda_graph_set_manual_hooks()
 
         iteration += 1
+
+        # FlagScale: Send heartbeat ping for in-process monitoring
+        if HAS_IN_PROCESS_MONITOR and in_process_ping is not None:
+            in_process_ping(iteration=iteration)
+
         batch_size = (
             mpu.get_data_parallel_world_size() * args.micro_batch_size * get_num_microbatches()
         )
@@ -2914,7 +2937,14 @@ def train(
             wandb_writer.finish()
         ft_integration.shutdown()
         one_logger_utils.finish()
+        # Shutdown FlagScale in-process monitoring
+        if HAS_IN_PROCESS_MONITOR and shutdown_in_process_monitoring is not None:
+            shutdown_in_process_monitoring()
         sys.exit(exit_code)
+
+    # Shutdown FlagScale in-process monitoring
+    if HAS_IN_PROCESS_MONITOR and shutdown_in_process_monitoring is not None:
+        shutdown_in_process_monitoring()
 
     return iteration, num_floating_point_operations_so_far
 
