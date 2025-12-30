@@ -818,7 +818,7 @@ def pretrain(
 
     ###### FlagScale Begin ######
     args = get_args()
-    if args.use_transformer_engine_fl:
+    if getattr(args, 'use_transformer_engine_fl', False):
         os.environ['USE_TRANSFORMER_ENGINE_FL'] = "True"
 
     # Initialize FlagScale in-process monitoring if enabled via environment
