@@ -2755,6 +2755,12 @@ def train(
 
         iteration += 1
 
+        # ====== TEST CODE: Simulate fault for restart testing ======
+        # TODO: Remove this after testing
+        if iteration == 22:
+            raise RuntimeError("Simulated fault for testing restart")
+        # ====== END TEST CODE ======
+
         # FlagScale: Send heartbeat ping for in-process monitoring
         if HAS_IN_PROCESS_MONITOR and in_process_ping is not None:
             in_process_ping(iteration=iteration)
