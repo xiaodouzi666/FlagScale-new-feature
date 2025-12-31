@@ -177,6 +177,10 @@ class InProcessMonitor:
         self._monitor_thread: Optional[threading.Thread] = None
         self._health_check_thread: Optional[threading.Thread] = None
 
+        # Pending restart exception (from background threads)
+        self._pending_restart_exception: Optional[RankShouldRestart] = None
+        self._pending_exception_lock = threading.Lock()
+
         # Event history
         self._events: List[MonitorEventRecord] = []
         self._max_events = 1000
@@ -281,7 +285,17 @@ class InProcessMonitor:
             iteration: Current training iteration
             phase: Current training phase
             metrics: Additional metrics to record
+
+        Raises:
+            RankShouldRestart: If a restart was triggered by health check failure
         """
+        # Check for pending restart exception from background threads
+        with self._pending_exception_lock:
+            if self._pending_restart_exception is not None:
+                exc = self._pending_restart_exception
+                self._pending_restart_exception = None
+                raise exc
+
         if iteration is not None:
             self._state.iteration = iteration
 
@@ -438,6 +452,12 @@ class InProcessMonitor:
         while self._running and not self._stop_event.is_set():
             try:
                 self._run_health_checks()
+            except RankShouldRestart as e:
+                # Store the restart exception to be raised in the main thread
+                with self._pending_exception_lock:
+                    self._pending_restart_exception = e
+                logger.warning(f"Health check triggered restart: {e.reason}")
+                # Don't break - let the main thread handle the restart
             except Exception as e:
                 logger.error(f"Error in health check loop: {e}")
 

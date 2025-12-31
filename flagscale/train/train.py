@@ -979,19 +979,46 @@ def pretrain(
 
         iteration = 0
         if args.do_train and args.train_iters > 0:
-            iteration, num_floating_point_operations_so_far = train(
-                forward_step_func,
-                model,
-                optimizer,
-                opt_param_scheduler,
-                train_data_iterator,
-                valid_data_iterator,
-                process_non_loss_data_func,
-                config,
-                checkpointing_context,
-                non_loss_data_func,
-                extra_valid_dataset_provider,
-            )
+            ###### FlagScale Begin: In-process restart support ######
+            # If restart is enabled, wrap train() with wrapper.run() to enable
+            # automatic restart on fault detection
+            if (_in_process_wrapper is not None and
+                hasattr(_in_process_wrapper, 'config') and
+                getattr(_in_process_wrapper.config, 'enable_restart', False)):
+
+                def _train_with_restart():
+                    return train(
+                        forward_step_func,
+                        model,
+                        optimizer,
+                        opt_param_scheduler,
+                        train_data_iterator,
+                        valid_data_iterator,
+                        process_non_loss_data_func,
+                        config,
+                        checkpointing_context,
+                        non_loss_data_func,
+                        extra_valid_dataset_provider,
+                    )
+
+                print_rank_0(f"> FlagScale in-process restart enabled (max_restarts={_in_process_wrapper.config.max_restarts})")
+                iteration, num_floating_point_operations_so_far = _in_process_wrapper.run(_train_with_restart)
+            else:
+                # Original behavior: direct call without restart loop
+                iteration, num_floating_point_operations_so_far = train(
+                    forward_step_func,
+                    model,
+                    optimizer,
+                    opt_param_scheduler,
+                    train_data_iterator,
+                    valid_data_iterator,
+                    process_non_loss_data_func,
+                    config,
+                    checkpointing_context,
+                    non_loss_data_func,
+                    extra_valid_dataset_provider,
+                )
+            ###### FlagScale End: In-process restart support ######
 
         print_datetime('after training is done')
 

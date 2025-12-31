@@ -340,6 +340,12 @@ class Wrapper:
             return self
 
         # Create and start monitor
+        # Enable restart triggering on health check failure if restart is enabled
+        enable_restart_on_failure = (
+            self.config.enable_restart and
+            self.config.restart_on_health_check_fail
+        )
+
         self._monitor = InProcessMonitor(
             rank=self.rank,
             world_size=self.world_size,
@@ -348,6 +354,7 @@ class Wrapper:
             health_check_interval=self.config.health_check_interval,
             event_callback=self._on_event,
             log_dir=self.config.log_dir,
+            enable_restart_on_failure=enable_restart_on_failure,
         )
         self._monitor.start()
         self._started = True
