@@ -65,6 +65,11 @@ def setup_in_process_monitoring(
     enable_network_health_check: bool = False,
     max_rank_faults: int = 5,
     log_dir: str = None,
+    # Restart-related parameters
+    enable_restart: bool = False,
+    max_restarts: int = 3,
+    min_world_size: int = 1,
+    restart_on_exception: bool = True,
 ) -> Wrapper:
     """Setup in-process monitoring from configuration or parameters.
 
@@ -82,6 +87,10 @@ def setup_in_process_monitoring(
         enable_network_health_check: Enable network interface checking
         max_rank_faults: Maximum faults before warning
         log_dir: Directory for monitoring logs
+        enable_restart: Enable automatic restart on fault detection
+        max_restarts: Maximum number of restart attempts
+        min_world_size: Minimum world size to continue restarting
+        restart_on_exception: Restart on uncaught exceptions
 
     Returns:
         Started Wrapper instance
@@ -102,6 +111,11 @@ def setup_in_process_monitoring(
         enable_network_health_check=enable_network_health_check,
         max_rank_faults=max_rank_faults,
         log_dir=log_dir,
+        # Restart-related config
+        enable_restart=enable_restart,
+        max_restarts=max_restarts,
+        min_world_size=min_world_size,
+        restart_on_exception=restart_on_exception,
     )
 
     if config is not None:
@@ -297,6 +311,12 @@ def init_from_env() -> Optional[Wrapper]:
         FLAGSCALE_ENABLE_NVML_CHECK: Enable NVML health check ("1" or "true")
         FLAGSCALE_MONITOR_LOG_DIR: Directory for monitoring logs
 
+        # Restart-related environment variables
+        FLAGSCALE_ENABLE_RESTART: Enable automatic restart on fault ("1" or "true")
+        FLAGSCALE_MAX_RESTARTS: Maximum number of restart attempts
+        FLAGSCALE_MIN_WORLD_SIZE: Minimum world size to continue restarting
+        FLAGSCALE_RESTART_ON_EXCEPTION: Restart on uncaught exceptions ("1" or "true")
+
     Returns:
         Wrapper instance if enabled, None otherwise
     """
@@ -318,10 +338,21 @@ def init_from_env() -> Optional[Wrapper]:
         except ValueError:
             return default
 
+    def get_int(key: str, default: int) -> int:
+        try:
+            return int(os.environ.get(key, default))
+        except ValueError:
+            return default
+
     return setup_in_process_monitoring(
         heartbeat_interval=get_float("FLAGSCALE_HEARTBEAT_INTERVAL", 10.0),
         health_check_interval=get_float("FLAGSCALE_HEALTH_CHECK_INTERVAL", 60.0),
         enable_cuda_health_check=get_bool("FLAGSCALE_ENABLE_CUDA_CHECK", True),
         enable_nvml_health_check=get_bool("FLAGSCALE_ENABLE_NVML_CHECK", True),
         log_dir=os.environ.get("FLAGSCALE_MONITOR_LOG_DIR"),
+        # Restart-related options
+        enable_restart=get_bool("FLAGSCALE_ENABLE_RESTART", False),
+        max_restarts=get_int("FLAGSCALE_MAX_RESTARTS", 3),
+        min_world_size=get_int("FLAGSCALE_MIN_WORLD_SIZE", 1),
+        restart_on_exception=get_bool("FLAGSCALE_RESTART_ON_EXCEPTION", True),
     )

@@ -1,14 +1,15 @@
 """Heartbeat monitoring for in-process fault detection.
 
 This module provides heartbeat-based progress monitoring inspired by
-NVIDIA's RankMonitorClient heartbeats API. Currently focused on monitoring
-only (alerts and metrics, no restart triggers).
+NVIDIA's RankMonitorClient heartbeats API. Supports both monitoring-only
+mode and restart-triggering mode.
 
 Key features:
 - Periodic heartbeat sending
 - Timeout detection with configurable thresholds
 - Dynamic timeout estimation
 - Support for checkpoint/initialization phases
+- Optional restart triggering on timeout
 """
 
 import logging
@@ -20,7 +21,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Callable, Dict, List, Optional
 
-from .exception import HeartbeatTimeoutError
+from .exception import HeartbeatTimeoutError, RankShouldRestart
 from .state import FrozenRankState, HealthStatus, RankState
 
 logger = logging.getLogger(__name__)
@@ -237,8 +238,7 @@ class HeartbeatMonitor:
     """Monitors heartbeats from multiple ranks.
 
     This class tracks heartbeats from all ranks and detects timeouts.
-    In monitoring-only mode, timeouts are logged as warnings but do not
-    trigger restarts.
+    Supports both monitoring-only mode and restart-triggering mode.
     """
 
     def __init__(
@@ -247,6 +247,8 @@ class HeartbeatMonitor:
         config: HeartbeatConfig = None,
         on_timeout: Callable[[int, float], None] = None,
         on_recovered: Callable[[int], None] = None,
+        enable_restart_on_timeout: bool = False,
+        on_restart_needed: Callable[[int, str], None] = None,
     ):
         """Initialize heartbeat monitor.
 
@@ -255,11 +257,15 @@ class HeartbeatMonitor:
             config: Heartbeat configuration
             on_timeout: Callback when timeout is detected (rank, last_heartbeat_age)
             on_recovered: Callback when rank recovers from timeout
+            enable_restart_on_timeout: If True, raise RankShouldRestart on timeout
+            on_restart_needed: Callback when restart is needed (rank, reason)
         """
         self.world_size = world_size
         self.config = config or HeartbeatConfig()
         self.on_timeout = on_timeout
         self.on_recovered = on_recovered
+        self.enable_restart_on_timeout = enable_restart_on_timeout
+        self.on_restart_needed = on_restart_needed
 
         self._lock = threading.Lock()
         self._last_heartbeats: Dict[int, HeartbeatRecord] = {}
@@ -339,9 +345,14 @@ class HeartbeatMonitor:
 
         Returns:
             List of ranks that have timed out
+
+        Raises:
+            RankShouldRestart: If enable_restart_on_timeout is True and timeout detected
         """
         current_time = time.time()
         timed_out_ranks = []
+        restart_triggered = False
+        restart_reason = None
 
         with self._lock:
             for rank in range(self.world_size):
@@ -373,9 +384,55 @@ class HeartbeatMonitor:
                             except Exception as e:
                                 logger.error(f"Error in timeout callback: {e}")
 
+                        # Check if we should trigger restart
+                        if self.enable_restart_on_timeout:
+                            restart_triggered = True
+                            restart_reason = (
+                                f"Heartbeat timeout for rank {rank}: "
+                                f"last heartbeat {age:.1f}s ago"
+                            )
+
+                            if self.on_restart_needed:
+                                try:
+                                    self.on_restart_needed(rank, restart_reason)
+                                except Exception as e:
+                                    logger.error(f"Error in restart callback: {e}")
+
                     timed_out_ranks.append(rank)
 
+        # Raise restart exception after releasing lock
+        if restart_triggered and restart_reason:
+            raise RankShouldRestart(
+                reason=restart_reason,
+                rank=timed_out_ranks[0] if timed_out_ranks else None,
+                fault_type="heartbeat_timeout",
+            )
+
         return timed_out_ranks
+
+    def trigger_restart_for_rank(self, rank: int, reason: str = None) -> None:
+        """Manually trigger a restart for a specific rank.
+
+        Args:
+            rank: The rank to restart
+            reason: Reason for the restart
+
+        Raises:
+            RankShouldRestart: Always raised to trigger the restart
+        """
+        restart_reason = reason or f"Manual restart triggered for rank {rank}"
+
+        if self.on_restart_needed:
+            try:
+                self.on_restart_needed(rank, restart_reason)
+            except Exception as e:
+                logger.error(f"Error in restart callback: {e}")
+
+        raise RankShouldRestart(
+            reason=restart_reason,
+            rank=rank,
+            fault_type="manual",
+        )
 
     def get_status(self) -> Dict[str, Any]:
         """Get current monitoring status."""

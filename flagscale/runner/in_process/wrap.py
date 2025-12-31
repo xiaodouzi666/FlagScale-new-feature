@@ -1,10 +1,15 @@
-"""Wrapper for in-process monitoring of training functions.
+"""Wrapper for in-process monitoring of training functions with restart support.
 
 This module provides a Wrapper class that wraps training functions to
-automatically enable heartbeat monitoring and health checks. Inspired by
-NVIDIA's nvidia-resiliency-ext Wrapper and AWS's HPWrapper.
+automatically enable heartbeat monitoring, health checks, and automatic
+restart on fault detection. Inspired by NVIDIA's nvidia-resiliency-ext
+Wrapper and AWS's HPWrapper.
 
-Current Status: Monitoring-only (no fault handling/restart logic)
+Features:
+- Heartbeat monitoring for detecting hung processes
+- Health checks (CUDA, NVML, network)
+- Automatic restart on fault detection
+- Configurable retry limits and backoff
 
 Example Usage:
     # As decorator
@@ -17,8 +22,8 @@ Example Usage:
     with Wrapper() as wrapper:
         train()
 
-    # Wrap existing function
-    wrapper = Wrapper()
+    # Wrap existing function with restart support
+    wrapper = Wrapper(enable_restart=True, max_restarts=3)
     wrapper.run(train_fn, args, kwargs)
 """
 
@@ -33,7 +38,9 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional, Union
 
-from .exception import HealthCheckError, MonitorError
+from .abort import Abort, ComposedAbort, AbortTorchDistributed, AbortCUDA, create_default_abort_handler
+from .exception import HealthCheckError, MonitorError, RankShouldRestart, RestartAbort
+from .initialize import RetryController, RestartConfig, create_default_retry_controller
 from .health_check import (
     ChainedHealthCheck,
     CudaHealthCheck,
@@ -74,6 +81,18 @@ class WrapperConfig:
         log_dir: Directory for monitoring logs
         init_timeout: Timeout during initialization phase
         checkpoint_timeout: Timeout during checkpoint operations
+
+        # Restart-related configuration
+        enable_restart: Enable automatic restart on fault detection
+        max_restarts: Maximum number of restart attempts (0 = unlimited)
+        min_world_size: Minimum world size to continue restarting
+        restart_on_health_check_fail: Restart when health check fails
+        restart_on_heartbeat_timeout: Restart when heartbeat times out
+        restart_on_hang: Restart when hang is detected
+        restart_on_exception: Restart on uncaught exceptions
+        restart_delay: Base delay between restart attempts (seconds)
+        exponential_backoff: Use exponential backoff for restart delays
+        max_restart_delay: Maximum delay between restarts (seconds)
     """
 
     heartbeat_interval: float = 10.0
@@ -87,10 +106,37 @@ class WrapperConfig:
     init_timeout: float = 300.0
     checkpoint_timeout: float = 600.0
 
+    # Restart-related configuration
+    enable_restart: bool = False
+    max_restarts: int = 3
+    min_world_size: int = 1
+    restart_on_health_check_fail: bool = True
+    restart_on_heartbeat_timeout: bool = True
+    restart_on_hang: bool = True
+    restart_on_exception: bool = True
+    restart_delay: float = 1.0
+    exponential_backoff: bool = True
+    max_restart_delay: float = 60.0
+
     @classmethod
     def from_dict(cls, config: Dict[str, Any]) -> "WrapperConfig":
         """Create config from dictionary."""
         return cls(**{k: v for k, v in config.items() if hasattr(cls, k)})
+
+    def get_restart_delay(self, restart_iteration: int) -> float:
+        """Get the delay for the given restart iteration.
+
+        Args:
+            restart_iteration: Current restart iteration
+
+        Returns:
+            Delay in seconds
+        """
+        if not self.exponential_backoff:
+            return self.restart_delay
+
+        delay = self.restart_delay * (2 ** restart_iteration)
+        return min(delay, self.max_restart_delay)
 
 
 class Wrapper:
@@ -134,10 +180,16 @@ class Wrapper:
         enable_network_health_check: bool = None,
         max_rank_faults: int = None,
         log_dir: str = None,
+        # Restart-related options
+        enable_restart: bool = None,
+        max_restarts: int = None,
+        min_world_size: int = None,
+        restart_on_exception: bool = None,
         # Callbacks
         on_health_check_failed: Callable[[HealthCheckResult], None] = None,
         on_fault: Callable[[str, Optional[Exception]], None] = None,
         on_iteration: Callable[[int], None] = None,
+        on_restart: Callable[[int, str], None] = None,
     ):
         """Initialize the Wrapper.
 
@@ -151,9 +203,14 @@ class Wrapper:
             enable_network_health_check: Override network health check
             max_rank_faults: Override max faults
             log_dir: Override log directory
+            enable_restart: Enable automatic restart on fault
+            max_restarts: Maximum restart attempts
+            min_world_size: Minimum world size to continue
+            restart_on_exception: Restart on uncaught exceptions
             on_health_check_failed: Callback when health check fails
             on_fault: Callback when fault is recorded
             on_iteration: Callback on each iteration ping
+            on_restart: Callback when restart is triggered (iteration, reason)
         """
         # Build config
         if isinstance(config, dict):
@@ -180,16 +237,38 @@ class Wrapper:
             self.config.max_rank_faults = max_rank_faults
         if log_dir is not None:
             self.config.log_dir = log_dir
+        if enable_restart is not None:
+            self.config.enable_restart = enable_restart
+        if max_restarts is not None:
+            self.config.max_restarts = max_restarts
+        if min_world_size is not None:
+            self.config.min_world_size = min_world_size
+        if restart_on_exception is not None:
+            self.config.restart_on_exception = restart_on_exception
 
         # Callbacks
         self.on_health_check_failed = on_health_check_failed
         self.on_fault = on_fault
         self.on_iteration = on_iteration
+        self.on_restart = on_restart
 
         # Initialize from environment
         self.rank = int(os.environ.get("RANK", 0))
         self.world_size = int(os.environ.get("WORLD_SIZE", 1))
         self.local_rank = int(os.environ.get("LOCAL_RANK", 0))
+
+        # Restart-related state
+        self._state = RankState.from_env()
+        self._retry_controller: Optional[RetryController] = None
+        self._abort_handler: Optional[Abort] = None
+
+        # Initialize restart components if enabled
+        if self.config.enable_restart:
+            self._retry_controller = create_default_retry_controller(
+                max_restarts=self.config.max_restarts,
+                min_world_size=self.config.min_world_size,
+            )
+            self._abort_handler = create_default_abort_handler()
 
         # State
         self._monitor: Optional[InProcessMonitor] = None
@@ -373,6 +452,9 @@ class Wrapper:
     ) -> Any:
         """Run a function with monitoring.
 
+        If enable_restart is True, uses run_with_restart for automatic
+        fault recovery. Otherwise, runs the function once with monitoring.
+
         Args:
             fn: Function to run
             *args: Arguments to pass to function
@@ -381,6 +463,9 @@ class Wrapper:
         Returns:
             Return value of the function
         """
+        if self.config.enable_restart:
+            return self.run_with_restart(fn, *args, **kwargs)
+
         self.start()
         try:
             return fn(*args, **kwargs)
@@ -389,6 +474,167 @@ class Wrapper:
             raise
         finally:
             self.stop()
+
+    def run_with_restart(
+        self,
+        fn: Callable,
+        *args,
+        **kwargs,
+    ) -> Any:
+        """Run a function with automatic restart on fault.
+
+        This method implements the core restart loop. When a fault is
+        detected (through health checks, heartbeat timeout, or exception),
+        it will abort, clean up resources, and restart the function.
+
+        Args:
+            fn: Function to run
+            *args: Arguments to pass to function
+            **kwargs: Keyword arguments to pass to function
+
+        Returns:
+            Return value of the function
+
+        Raises:
+            RestartAbort: When max restarts exceeded or world size too small
+        """
+        if not self._retry_controller:
+            self._retry_controller = create_default_retry_controller(
+                max_restarts=self.config.max_restarts,
+                min_world_size=self.config.min_world_size,
+            )
+
+        if not self._abort_handler:
+            self._abort_handler = create_default_abort_handler()
+
+        result = None
+        last_error = None
+
+        while True:
+            # Get frozen state for checks
+            frozen_state = FrozenRankState.from_state(self._state)
+
+            try:
+                # 1. Check if we should continue (retry controller)
+                if not self._retry_controller.should_continue(frozen_state):
+                    raise RestartAbort(
+                        reason=f"Retry limit reached after {self._state.restart_iteration} attempts",
+                        restart_count=self._state.restart_iteration,
+                    )
+
+                # Log restart attempt
+                if self._state.restart_iteration > 0:
+                    logger.info(
+                        f"Rank {self.rank}: Restart attempt {self._state.restart_iteration}"
+                        f"/{self.config.max_restarts if self.config.max_restarts > 0 else '∞'}"
+                    )
+                    if self.on_restart:
+                        self.on_restart(
+                            self._state.restart_iteration,
+                            self._state.last_restart_reason or "unknown",
+                        )
+
+                    # Apply restart delay with exponential backoff
+                    delay = self.config.get_restart_delay(self._state.restart_iteration - 1)
+                    if delay > 0:
+                        logger.debug(f"Waiting {delay:.1f}s before restart...")
+                        time.sleep(delay)
+
+                # 2. Start monitoring
+                self.start()
+
+                # 3. Execute the training function
+                self._state.set_mode(RankMode.ACTIVE)
+                result = fn(*args, **kwargs)
+
+                # 4. Success - exit the loop
+                self._state.set_mode(RankMode.TERMINATED)
+                logger.info(f"Rank {self.rank}: Function completed successfully")
+                break
+
+            except RankShouldRestart as e:
+                # 5. Restart triggered by fault detection
+                logger.warning(f"Rank {self.rank}: Restart triggered: {e.reason}")
+                last_error = e.original_error
+                self._handle_restart(e.reason, e.original_error)
+                continue
+
+            except RestartAbort as e:
+                # 6. Restart aborted - exit with error
+                logger.error(f"Rank {self.rank}: Restart aborted: {e.reason}")
+                raise
+
+            except Exception as e:
+                # 7. Unexpected exception
+                if self.config.restart_on_exception:
+                    logger.warning(
+                        f"Rank {self.rank}: Exception caught, triggering restart: {e}"
+                    )
+                    last_error = e
+                    self._handle_restart(f"Exception: {type(e).__name__}", e)
+                    continue
+                else:
+                    # Don't restart on exceptions, just record and re-raise
+                    self.record_fault(str(e), e)
+                    raise
+
+            finally:
+                # Always stop monitoring
+                self.stop()
+
+        return result
+
+    def _handle_restart(self, reason: str, error: Exception = None) -> None:
+        """Handle a restart event.
+
+        This method performs cleanup and prepares for the next restart attempt.
+
+        Args:
+            reason: Reason for the restart
+            error: The exception that caused the restart, if any
+        """
+        # Record the fault
+        self.record_fault(reason, error)
+
+        # Stop monitoring
+        self.stop()
+
+        # Get frozen state for abort handlers
+        frozen_state = FrozenRankState.from_state(self._state)
+
+        # Execute abort handlers (cleanup)
+        if self._abort_handler:
+            try:
+                self._abort_handler(frozen_state)
+            except Exception as e:
+                logger.warning(f"Rank {self.rank}: Abort handler error: {e}")
+
+        # Advance to next restart iteration
+        self._state.advance(reason)
+
+        logger.info(
+            f"Rank {self.rank}: Prepared for restart iteration {self._state.restart_iteration}"
+        )
+
+    def trigger_restart(self, reason: str, error: Exception = None) -> None:
+        """Manually trigger a restart.
+
+        This can be called from within the training function to trigger
+        a restart based on application-specific conditions.
+
+        Args:
+            reason: Reason for the restart
+            error: Associated error if any
+
+        Raises:
+            RankShouldRestart: Always raised to trigger the restart
+        """
+        raise RankShouldRestart(
+            reason=reason,
+            rank=self.rank,
+            original_error=error,
+            fault_type="manual",
+        )
 
     def __call__(self, fn: Callable) -> Callable:
         """Use as decorator.

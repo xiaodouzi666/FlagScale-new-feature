@@ -2,8 +2,8 @@
 
 This module provides monitoring capabilities for distributed training,
 inspired by NVIDIA's nvidia-resiliency-ext and AWS's sagemaker-hyperpod
-checkpointless training. Currently focused on monitoring only (alerts
-and metrics collection, no fault handling/restart logic).
+checkpointless training. Supports both monitoring-only mode and automatic
+restart on fault detection.
 
 Key Features:
 - Heartbeat-based progress monitoring
@@ -11,6 +11,8 @@ Key Features:
 - Fault counting and tracking
 - Distributed state management
 - Event logging and metrics collection
+- Automatic restart on fault detection (optional)
+- Configurable retry limits and backoff
 
 Example Usage:
     # Simple usage with context manager
@@ -108,8 +110,32 @@ from .exception import (
     FaultCounterExceeded,
     HeartbeatTimeoutError,
     HealthCheckError,
+    HealthCheckPassed,
     MonitorError,
+    RankShouldRestart,
+    RestartAbort,
+    RestartRequired,
     StoreError,
+)
+
+# Abort handlers (for restart)
+from .abort import (
+    Abort,
+    AbortCUDA,
+    AbortNCCL,
+    AbortTorchDistributed,
+    ComposedAbort,
+    create_default_abort_handler,
+)
+
+# Initialize/Retry control (for restart)
+from .initialize import (
+    ComposedInitialize,
+    Initialize,
+    InitializeDistributed,
+    RestartConfig,
+    RetryController,
+    create_default_retry_controller,
 )
 
 # Wrapper
@@ -182,6 +208,24 @@ __all__ = [
     "StoreError",
     "ConfigurationError",
     "FaultCounterExceeded",
+    "RankShouldRestart",
+    "RestartAbort",
+    "RestartRequired",
+    "HealthCheckPassed",
+    # Abort handlers (for restart)
+    "Abort",
+    "AbortTorchDistributed",
+    "AbortNCCL",
+    "AbortCUDA",
+    "ComposedAbort",
+    "create_default_abort_handler",
+    # Initialize/Retry control (for restart)
+    "Initialize",
+    "RetryController",
+    "InitializeDistributed",
+    "ComposedInitialize",
+    "RestartConfig",
+    "create_default_retry_controller",
     # Wrapper
     "Wrapper",
     "WrapperConfig",
@@ -201,4 +245,4 @@ __all__ = [
     "init_from_env",
 ]
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"  # Added restart support

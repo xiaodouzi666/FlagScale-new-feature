@@ -294,6 +294,17 @@ def _generate_run_script_train(
             # Set monitor log directory
             monitor_log_dir = in_process_config.get("log_dir", None) or system_config.logging.log_dir
             f.write(f"export FLAGSCALE_MONITOR_LOG_DIR={monitor_log_dir}/in_process_monitor\n")
+            # Restart-related environment variables
+            if in_process_config.get("enable_restart") is not None:
+                val = "1" if in_process_config.enable_restart else "0"
+                f.write(f"export FLAGSCALE_ENABLE_RESTART={val}\n")
+            if in_process_config.get("max_restarts") is not None:
+                f.write(f"export FLAGSCALE_MAX_RESTARTS={in_process_config.max_restarts}\n")
+            if in_process_config.get("min_world_size") is not None:
+                f.write(f"export FLAGSCALE_MIN_WORLD_SIZE={in_process_config.min_world_size}\n")
+            if in_process_config.get("restart_on_exception") is not None:
+                val = "1" if in_process_config.restart_on_exception else "0"
+                f.write(f"export FLAGSCALE_RESTART_ON_EXCEPTION={val}\n")
             f.write(f"\n")
         f.write(f'cmd="{cmd}"\n')
         f.write(f"\n")

@@ -2,7 +2,7 @@
 
 This module provides monitoring capabilities for distributed training,
 including heartbeat monitoring, health checks, and metric collection.
-Currently focused on monitoring only (no fault handling/restart logic).
+Supports both monitoring-only mode and restart-triggering mode.
 """
 
 import json
@@ -17,7 +17,7 @@ from datetime import datetime
 from enum import Enum
 from typing import Any, Callable, Dict, List, Optional
 
-from .exception import MonitorError, StoreError
+from .exception import MonitorError, StoreError, RankShouldRestart
 from .health_check import (
     ChainedHealthCheck,
     CudaHealthCheck,
@@ -118,6 +118,9 @@ class InProcessMonitor:
         health_check_interval: float = 60.0,
         event_callback: Callable[[MonitorEventRecord], None] = None,
         log_dir: str = None,
+        # Restart triggering options
+        enable_restart_on_failure: bool = False,
+        on_restart_needed: Callable[[str, Exception], None] = None,
     ):
         """Initialize the in-process monitor.
 
@@ -129,7 +132,11 @@ class InProcessMonitor:
             health_check_interval: Interval between health checks in seconds
             event_callback: Callback for monitoring events
             log_dir: Directory for writing monitoring logs
+            enable_restart_on_failure: If True, raise RankShouldRestart on failure
+            on_restart_needed: Callback when restart is needed
         """
+        self.enable_restart_on_failure = enable_restart_on_failure
+        self.on_restart_needed = on_restart_needed
         # Initialize rank info from environment if not provided
         self.rank = rank if rank is not None else int(os.environ.get("RANK", 0))
         self.world_size = (
@@ -337,6 +344,47 @@ class InProcessMonitor:
 
         return fault_count
 
+    def trigger_restart(
+        self,
+        reason: str,
+        error: Exception = None,
+        fault_type: str = "manual",
+    ) -> None:
+        """Trigger a restart.
+
+        This method raises RankShouldRestart to signal that the training
+        should be restarted. Use this for application-specific fault detection.
+
+        Args:
+            reason: Reason for the restart
+            error: Associated error if any
+            fault_type: Type of fault (manual, health_check, heartbeat, etc.)
+
+        Raises:
+            RankShouldRestart: Always raised to trigger the restart
+        """
+        # Record the fault
+        self.record_fault(reason, error)
+
+        # Record restart trigger event
+        self._record_event(
+            MonitorEvent.FAULT,
+            {
+                "trigger": fault_type,
+                "reason": reason,
+                "restart_requested": True,
+            },
+            severity="error",
+        )
+
+        # Raise restart exception
+        raise RankShouldRestart(
+            reason=reason,
+            rank=self.rank,
+            original_error=error,
+            fault_type=fault_type,
+        )
+
     def get_state(self) -> FrozenRankState:
         """Get current frozen state."""
         return FrozenRankState.from_state(self._state)
@@ -412,9 +460,11 @@ class InProcessMonitor:
             self._state.set_health_status(HealthStatus.UNHEALTHY)
             self._stats["health_checks_failed"] += 1
 
-            # Record failed checks
+            # Collect failed check info
+            failed_checks = []
             for result in results:
                 if not result.healthy:
+                    failed_checks.append(result)
                     self._record_event(
                         MonitorEvent.HEALTH_CHECK,
                         {
@@ -425,6 +475,33 @@ class InProcessMonitor:
                         },
                         severity="warning",
                     )
+
+            # Trigger restart if enabled
+            if self.enable_restart_on_failure and failed_checks:
+                reason = f"Health check failed: {', '.join(r.check_name for r in failed_checks)}"
+                logger.warning(f"Rank {self.rank}: {reason}")
+
+                # Call callback if provided
+                if self.on_restart_needed:
+                    self.on_restart_needed(reason, None)
+
+                # Record restart trigger event
+                self._record_event(
+                    MonitorEvent.FAULT,
+                    {
+                        "trigger": "health_check",
+                        "reason": reason,
+                        "failed_checks": [r.check_name for r in failed_checks],
+                    },
+                    severity="error",
+                )
+
+                # Raise restart exception
+                raise RankShouldRestart(
+                    reason=reason,
+                    rank=self.rank,
+                    fault_type="health_check",
+                )
 
     def _record_event(
         self,

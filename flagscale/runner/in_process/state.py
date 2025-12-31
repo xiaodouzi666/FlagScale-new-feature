@@ -39,11 +39,13 @@ class RankState:
         rank: Current rank index
         initial_rank: Original rank index (before any reassignment)
         world_size: Total number of ranks
+        active_world_size: Number of currently active ranks
         local_rank: Local rank on this node
         node_rank: Node index in the cluster
         mode: Current operational mode
         health_status: Current health status
         iteration: Current training iteration
+        restart_iteration: Number of restart attempts
         last_heartbeat: Timestamp of last heartbeat
         fault_count: Number of faults detected on this rank
         metrics: Additional metrics/metadata
@@ -52,15 +54,18 @@ class RankState:
     rank: int = 0
     initial_rank: int = 0
     world_size: int = 1
+    active_world_size: int = 1
     local_rank: int = 0
     node_rank: int = 0
     mode: RankMode = RankMode.INITIALIZED
     health_status: HealthStatus = HealthStatus.UNKNOWN
     iteration: int = 0
+    restart_iteration: int = 0
     last_heartbeat: float = 0.0
     fault_count: int = 0
     metrics: Dict[str, Any] = field(default_factory=dict)
     exception: Optional[Exception] = None
+    last_restart_reason: Optional[str] = None
 
     @classmethod
     def from_env(cls) -> "RankState":
@@ -80,12 +85,39 @@ class RankState:
             rank=rank,
             initial_rank=rank,
             world_size=world_size,
+            active_world_size=world_size,
             local_rank=local_rank,
             node_rank=node_rank,
             mode=RankMode.INITIALIZED,
             health_status=HealthStatus.UNKNOWN,
             last_heartbeat=time.time(),
         )
+
+    def advance(self, reason: str = None) -> None:
+        """Advance to next restart iteration.
+
+        This method is called when a restart is triggered to prepare
+        for the next attempt.
+
+        Args:
+            reason: Optional reason for the restart
+        """
+        self.restart_iteration += 1
+        self.mode = RankMode.INITIALIZED
+        self.health_status = HealthStatus.UNKNOWN
+        self.exception = None
+        self.last_restart_reason = reason
+        self.last_heartbeat = time.time()
+
+    def reset_for_restart(self) -> None:
+        """Reset state for a new restart attempt.
+
+        Clears transient state while preserving restart count and metrics.
+        """
+        self.mode = RankMode.INITIALIZED
+        self.health_status = HealthStatus.UNKNOWN
+        self.exception = None
+        self.last_heartbeat = time.time()
 
     def update_heartbeat(self) -> None:
         """Update the last heartbeat timestamp."""
@@ -118,14 +150,17 @@ class RankState:
             "rank": self.rank,
             "initial_rank": self.initial_rank,
             "world_size": self.world_size,
+            "active_world_size": self.active_world_size,
             "local_rank": self.local_rank,
             "node_rank": self.node_rank,
             "mode": self.mode.value,
             "health_status": self.health_status.value,
             "iteration": self.iteration,
+            "restart_iteration": self.restart_iteration,
             "last_heartbeat": self.last_heartbeat,
             "fault_count": self.fault_count,
             "metrics": self.metrics,
+            "last_restart_reason": self.last_restart_reason,
         }
 
     @classmethod
@@ -135,12 +170,15 @@ class RankState:
             rank=data.get("rank", 0),
             initial_rank=data.get("initial_rank", 0),
             world_size=data.get("world_size", 1),
+            active_world_size=data.get("active_world_size", data.get("world_size", 1)),
             local_rank=data.get("local_rank", 0),
             node_rank=data.get("node_rank", 0),
             iteration=data.get("iteration", 0),
+            restart_iteration=data.get("restart_iteration", 0),
             last_heartbeat=data.get("last_heartbeat", 0.0),
             fault_count=data.get("fault_count", 0),
             metrics=data.get("metrics", {}),
+            last_restart_reason=data.get("last_restart_reason"),
         )
 
         # Parse enums
@@ -162,14 +200,17 @@ class FrozenRankState:
     rank: int
     initial_rank: int
     world_size: int
+    active_world_size: int
     local_rank: int
     node_rank: int
     mode: RankMode
     health_status: HealthStatus
     iteration: int
+    restart_iteration: int
     last_heartbeat: float
     fault_count: int
     metrics: tuple  # Frozen version of metrics dict
+    last_restart_reason: Optional[str] = None
 
     @classmethod
     def from_state(cls, state: RankState) -> "FrozenRankState":
@@ -180,14 +221,17 @@ class FrozenRankState:
             rank=state.rank,
             initial_rank=state.initial_rank,
             world_size=state.world_size,
+            active_world_size=state.active_world_size,
             local_rank=state.local_rank,
             node_rank=state.node_rank,
             mode=state.mode,
             health_status=state.health_status,
             iteration=state.iteration,
+            restart_iteration=state.restart_iteration,
             last_heartbeat=state.last_heartbeat,
             fault_count=state.fault_count,
             metrics=frozen_metrics,
+            last_restart_reason=state.last_restart_reason,
         )
 
     def get_metric(self, key: str, default: Any = None) -> Any:
