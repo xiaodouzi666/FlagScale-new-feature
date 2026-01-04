@@ -196,12 +196,13 @@ class AbortCUDA(Abort):
 class AbortMegatron(Abort):
     """Abort handler for Megatron-LM state cleanup.
 
-    This handler cleans up Megatron global state including timers,
-    microbatches calculator, memory buffer, model parallel state, etc.
+    This handler resets Megatron timers and other state that needs to be
+    cleaned up for restart, while preserving args and other global state
+    that the train function depends on.
     """
 
     def __call__(self, state: FrozenRankState) -> FrozenRankState:
-        """Clean up Megatron global state.
+        """Clean up Megatron state for restart.
 
         Args:
             state: Current frozen rank state
@@ -210,41 +211,29 @@ class AbortMegatron(Abort):
             The state unchanged
         """
         try:
-            # Import and call destroy functions
+            # Reset timers - this is critical to avoid "timer already started" errors
             try:
-                from megatron.training.global_vars import destroy_global_vars
-                destroy_global_vars()
-                logger.debug(f"Rank {state.rank}: Megatron global vars destroyed")
+                from megatron.training.global_vars import get_timers
+                timers = get_timers()
+                if timers is not None:
+                    # Reset all timer states
+                    if hasattr(timers, '_timers'):
+                        for name, timer in timers._timers.items():
+                            # Reset the timer's internal state
+                            if hasattr(timer, '_started'):
+                                timer._started = False
+                            if hasattr(timer, '_start_time'):
+                                timer._start_time = None
+                            if hasattr(timer, '_elapsed'):
+                                timer._elapsed = 0.0
+                            if hasattr(timer, '_elapsed_for_this_iteration'):
+                                timer._elapsed_for_this_iteration = 0.0
+                    logger.debug(f"Rank {state.rank}: Megatron timers reset")
             except Exception as e:
-                logger.debug(f"Failed to destroy global vars: {e}")
+                logger.debug(f"Failed to reset timers: {e}")
 
-            try:
-                from megatron.core.num_microbatches_calculator import destroy_num_microbatches_calculator
-                destroy_num_microbatches_calculator()
-                logger.debug(f"Rank {state.rank}: Microbatches calculator destroyed")
-            except Exception as e:
-                logger.debug(f"Failed to destroy microbatches calculator: {e}")
-
-            try:
-                from megatron.core.parallel_state import destroy_global_memory_buffer, destroy_model_parallel
-                destroy_global_memory_buffer()
-                logger.debug(f"Rank {state.rank}: Global memory buffer destroyed")
-            except Exception as e:
-                logger.debug(f"Failed to destroy global memory buffer: {e}")
-
-            try:
-                from megatron.core.parallel_state import destroy_model_parallel
-                destroy_model_parallel()
-                logger.debug(f"Rank {state.rank}: Model parallel destroyed")
-            except Exception as e:
-                logger.debug(f"Failed to destroy model parallel: {e}")
-
-            try:
-                from megatron.core.rerun_state_machine import destroy_rerun_state_machine
-                destroy_rerun_state_machine()
-                logger.debug(f"Rank {state.rank}: Rerun state machine destroyed")
-            except Exception as e:
-                logger.debug(f"Failed to destroy rerun state machine: {e}")
+            # Note: We intentionally do NOT call destroy_global_vars() because
+            # it would destroy args which the train function needs
 
             logger.info(f"Rank {state.rank}: Megatron state cleanup completed")
 
