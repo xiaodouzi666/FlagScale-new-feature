@@ -193,6 +193,69 @@ class AbortCUDA(Abort):
         return state
 
 
+class AbortMegatron(Abort):
+    """Abort handler for Megatron-LM state cleanup.
+
+    This handler cleans up Megatron global state including timers,
+    microbatches calculator, memory buffer, model parallel state, etc.
+    """
+
+    def __call__(self, state: FrozenRankState) -> FrozenRankState:
+        """Clean up Megatron global state.
+
+        Args:
+            state: Current frozen rank state
+
+        Returns:
+            The state unchanged
+        """
+        try:
+            # Import and call destroy functions
+            try:
+                from megatron.training.global_vars import destroy_global_vars
+                destroy_global_vars()
+                logger.debug(f"Rank {state.rank}: Megatron global vars destroyed")
+            except Exception as e:
+                logger.debug(f"Failed to destroy global vars: {e}")
+
+            try:
+                from megatron.core.num_microbatches_calculator import destroy_num_microbatches_calculator
+                destroy_num_microbatches_calculator()
+                logger.debug(f"Rank {state.rank}: Microbatches calculator destroyed")
+            except Exception as e:
+                logger.debug(f"Failed to destroy microbatches calculator: {e}")
+
+            try:
+                from megatron.core.parallel_state import destroy_global_memory_buffer, destroy_model_parallel
+                destroy_global_memory_buffer()
+                logger.debug(f"Rank {state.rank}: Global memory buffer destroyed")
+            except Exception as e:
+                logger.debug(f"Failed to destroy global memory buffer: {e}")
+
+            try:
+                from megatron.core.parallel_state import destroy_model_parallel
+                destroy_model_parallel()
+                logger.debug(f"Rank {state.rank}: Model parallel destroyed")
+            except Exception as e:
+                logger.debug(f"Failed to destroy model parallel: {e}")
+
+            try:
+                from megatron.core.rerun_state_machine import destroy_rerun_state_machine
+                destroy_rerun_state_machine()
+                logger.debug(f"Rank {state.rank}: Rerun state machine destroyed")
+            except Exception as e:
+                logger.debug(f"Failed to destroy rerun state machine: {e}")
+
+            logger.info(f"Rank {state.rank}: Megatron state cleanup completed")
+
+        except ImportError:
+            logger.debug("Megatron not available for cleanup")
+        except Exception as e:
+            logger.warning(f"Rank {state.rank}: Error during Megatron cleanup: {e}")
+
+        return state
+
+
 class ComposedAbort(Abort):
     """Compose multiple abort handlers.
 
@@ -228,9 +291,10 @@ def create_default_abort_handler() -> Abort:
     """Create a default abort handler with common cleanup operations.
 
     Returns:
-        A composed abort handler with NCCL, distributed, and CUDA cleanup
+        A composed abort handler with Megatron, NCCL, distributed, and CUDA cleanup
     """
     return ComposedAbort([
+        AbortMegatron(),  # Clean up Megatron state (timers, etc.) first
         AbortNCCL(),
         AbortTorchDistributed(),
         AbortCUDA(reset_device=False),
