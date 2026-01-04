@@ -2757,7 +2757,10 @@ def train(
 
         # ====== TEST CODE: Simulate fault for restart testing ======
         # TODO: Remove this after testing
-        if iteration == 22:
+        _fault_marker_file = "/tmp/flagscale_test_fault_triggered"
+        if iteration == 10 and not os.path.exists(_fault_marker_file):
+            with open(_fault_marker_file, 'w') as f:
+                f.write(str(iteration))
             raise RuntimeError("Simulated fault for testing restart")
         # ====== END TEST CODE ======
 
