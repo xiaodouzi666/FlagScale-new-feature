@@ -279,12 +279,17 @@ class ComposedAbort(Abort):
 def create_default_abort_handler() -> Abort:
     """Create a default abort handler with common cleanup operations.
 
+    For in-process restart where we only wrap the train() function (not the
+    full pretrain()), we should NOT destroy process groups or Megatron state
+    because train() depends on them. We only reset timers to avoid
+    "timer already started" errors.
+
     Returns:
-        A composed abort handler with Megatron, NCCL, distributed, and CUDA cleanup
+        A composed abort handler with Megatron timer reset and CUDA cleanup
     """
     return ComposedAbort([
-        AbortMegatron(),  # Clean up Megatron state (timers, etc.) first
-        AbortNCCL(),
-        AbortTorchDistributed(),
+        AbortMegatron(),  # Reset timers only, preserve other state
         AbortCUDA(reset_device=False),
+        # Note: We intentionally skip AbortNCCL() and AbortTorchDistributed()
+        # because train() needs the process groups to be initialized
     ])
