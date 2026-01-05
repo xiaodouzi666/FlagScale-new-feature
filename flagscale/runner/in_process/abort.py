@@ -212,22 +212,18 @@ class AbortMegatron(Abort):
         """
         try:
             # Reset timers - this is critical to avoid "timer already started" errors
+            # We only reset the _started flag, NOT the accumulated time values
             try:
                 from megatron.training.global_vars import get_timers
                 timers = get_timers()
                 if timers is not None:
-                    # Reset all timer states
+                    # Reset only the _started flag for each timer
                     if hasattr(timers, '_timers'):
                         for name, timer in timers._timers.items():
-                            # Reset the timer's internal state
+                            # Only reset the started flag so timer can be restarted
                             if hasattr(timer, '_started'):
                                 timer._started = False
-                            if hasattr(timer, '_start_time'):
-                                timer._start_time = None
-                            if hasattr(timer, '_elapsed'):
-                                timer._elapsed = 0.0
-                            if hasattr(timer, '_elapsed_for_this_iteration'):
-                                timer._elapsed_for_this_iteration = 0.0
+                            # Do NOT reset _elapsed or other accumulated values
                     logger.debug(f"Rank {state.rank}: Megatron timers reset")
             except Exception as e:
                 logger.debug(f"Failed to reset timers: {e}")
