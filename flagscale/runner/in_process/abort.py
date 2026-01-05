@@ -196,9 +196,11 @@ class AbortCUDA(Abort):
 class AbortMegatron(Abort):
     """Abort handler for Megatron-LM state cleanup.
 
-    This handler resets Megatron timers and other state that needs to be
-    cleaned up for restart, while preserving args and other global state
-    that the train function depends on.
+    This handler performs full cleanup of Megatron state for pretrain-level
+    restart, including global vars, timers, and parallel state.
+
+    For pretrain-level restart, we need to destroy ALL Megatron state because
+    pretrain() will re-initialize everything from scratch.
     """
 
     def __call__(self, state: FrozenRankState) -> FrozenRankState:
@@ -211,32 +213,84 @@ class AbortMegatron(Abort):
             The state unchanged
         """
         try:
-            # Reset timers - this is critical to avoid "timer already started" errors
-            # We only reset the _started flag, NOT the accumulated time values
+            # Destroy all Megatron global state for full restart
+            # This is safe because we're wrapping pretrain() which will
+            # re-initialize everything
             try:
-                from megatron.training.global_vars import get_timers
-                timers = get_timers()
-                if timers is not None:
-                    # Reset only the _started flag for each timer
-                    if hasattr(timers, '_timers'):
-                        for name, timer in timers._timers.items():
-                            # Only reset the started flag so timer can be restarted
-                            if hasattr(timer, '_started'):
-                                timer._started = False
-                            # Do NOT reset _elapsed or other accumulated values
-                    logger.debug(f"Rank {state.rank}: Megatron timers reset")
+                from megatron.training.global_vars import destroy_global_vars
+                destroy_global_vars()
+                logger.debug(f"Rank {state.rank}: Megatron global vars destroyed")
             except Exception as e:
-                logger.debug(f"Failed to reset timers: {e}")
+                logger.debug(f"Failed to destroy global vars: {e}")
 
-            # Note: We intentionally do NOT call destroy_global_vars() because
-            # it would destroy args which the train function needs
+            # Destroy num microbatches calculator
+            try:
+                from megatron.core.num_microbatches_calculator import (
+                    destroy_num_microbatches_calculator
+                )
+                destroy_num_microbatches_calculator()
+                logger.debug(f"Rank {state.rank}: Num microbatches calculator destroyed")
+            except Exception as e:
+                logger.debug(f"Failed to destroy num microbatches calculator: {e}")
 
-            logger.info(f"Rank {state.rank}: Megatron state cleanup completed")
+            # Destroy global memory buffer
+            try:
+                from megatron.core.parallel_state import destroy_global_memory_buffer
+                destroy_global_memory_buffer()
+                logger.debug(f"Rank {state.rank}: Global memory buffer destroyed")
+            except Exception as e:
+                logger.debug(f"Failed to destroy global memory buffer: {e}")
+
+            # Destroy model parallel state
+            try:
+                from megatron.core.parallel_state import destroy_model_parallel
+                destroy_model_parallel()
+                logger.debug(f"Rank {state.rank}: Model parallel state destroyed")
+            except Exception as e:
+                logger.debug(f"Failed to destroy model parallel: {e}")
+
+            # Destroy rerun state machine
+            try:
+                from megatron.core.rerun_state_machine import destroy_rerun_state_machine
+                destroy_rerun_state_machine()
+                logger.debug(f"Rank {state.rank}: Rerun state machine destroyed")
+            except Exception as e:
+                logger.debug(f"Failed to destroy rerun state machine: {e}")
+
+            logger.info(f"Rank {state.rank}: Megatron full state cleanup completed")
 
         except ImportError:
             logger.debug("Megatron not available for cleanup")
         except Exception as e:
             logger.warning(f"Rank {state.rank}: Error during Megatron cleanup: {e}")
+
+        return state
+
+
+class AbortFlagScale(Abort):
+    """Abort handler for FlagScale-specific state cleanup.
+
+    This handler cleans up FlagScale global variables for restart.
+    """
+
+    def __call__(self, state: FrozenRankState) -> FrozenRankState:
+        """Clean up FlagScale state for restart.
+
+        Args:
+            state: Current frozen rank state
+
+        Returns:
+            The state unchanged
+        """
+        try:
+            from flagscale.train.global_vars import destroy_flagscale_global_vars
+            destroy_flagscale_global_vars()
+            logger.debug(f"Rank {state.rank}: FlagScale global vars destroyed")
+            logger.info(f"Rank {state.rank}: FlagScale state cleanup completed")
+        except ImportError:
+            logger.debug("FlagScale not available for cleanup")
+        except Exception as e:
+            logger.warning(f"Rank {state.rank}: Error during FlagScale cleanup: {e}")
 
         return state
 
@@ -273,19 +327,25 @@ class ComposedAbort(Abort):
 
 
 def create_default_abort_handler() -> Abort:
-    """Create a default abort handler with common cleanup operations.
+    """Create a default abort handler with full cleanup for pretrain-level restart.
 
-    For in-process restart where we only wrap the train() function (not the
-    full pretrain()), we should NOT destroy process groups or Megatron state
-    because train() depends on them. We only reset timers to avoid
-    "timer already started" errors.
+    For in-process restart where we wrap the entire pretrain() function, we need
+    to perform full cleanup of all resources so that pretrain() can re-initialize
+    everything from scratch.
+
+    The cleanup order is important:
+    1. CUDA cleanup first (synchronize, empty cache)
+    2. Abort NCCL operations that may be blocking
+    3. Destroy Megatron state (global vars, parallel state, etc.)
+    4. Finally destroy torch.distributed process groups
 
     Returns:
-        A composed abort handler with Megatron timer reset and CUDA cleanup
+        A composed abort handler with full cleanup for pretrain-level restart
     """
     return ComposedAbort([
-        AbortMegatron(),  # Reset timers only, preserve other state
-        AbortCUDA(reset_device=False),
-        # Note: We intentionally skip AbortNCCL() and AbortTorchDistributed()
-        # because train() needs the process groups to be initialized
+        AbortCUDA(reset_device=False),  # CUDA cleanup first
+        AbortNCCL(),                     # Abort any blocking NCCL operations
+        AbortFlagScale(),                # Destroy FlagScale global state
+        AbortMegatron(),                 # Destroy all Megatron state
+        AbortTorchDistributed(),         # Finally destroy process groups
     ])

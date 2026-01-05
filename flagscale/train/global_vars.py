@@ -54,3 +54,18 @@ def set_get_spiky_loss_detector(args):
     global _GLOBAL_SPIKY_LOSS_DETECTOR
     _ensure_var_is_not_initialized(_GLOBAL_SPIKY_LOSS_DETECTOR, "spiky loss detector")
     _GLOBAL_SPIKY_LOSS_DETECTOR = SpikyLossDetector(args.spiky_loss_threshold)
+
+
+def destroy_flagscale_global_vars():
+    """Destroy all FlagScale global variables for restart.
+
+    This function resets all FlagScale global variables to None,
+    allowing them to be re-initialized during restart.
+    """
+    global _GLOBAL_EXTRA_VALID_DATASETS
+    global _GLOBAL_PARALLEL_CONTEXT
+    global _GLOBAL_SPIKY_LOSS_DETECTOR
+
+    _GLOBAL_EXTRA_VALID_DATASETS = None
+    _GLOBAL_PARALLEL_CONTEXT = None
+    _GLOBAL_SPIKY_LOSS_DETECTOR = None

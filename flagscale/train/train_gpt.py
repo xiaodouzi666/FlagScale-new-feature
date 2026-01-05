@@ -8,6 +8,14 @@ from functools import partial
 from typing import List, Optional, Tuple
 from megatron.core import parallel_state
 from megatron.training import inprocess_restart
+
+# FlagScale in-process restart support
+try:
+    from flagscale.runner.in_process import init_from_env as init_flagscale_restart
+    HAS_FLAGSCALE_RESTART = True
+except ImportError:
+    HAS_FLAGSCALE_RESTART = False
+    init_flagscale_restart = None
 from megatron.core.datasets.blended_megatron_dataset_builder import BlendedMegatronDatasetBuilder
 from megatron.core.datasets.gpt_dataset import GPTDataset, GPTDatasetConfig, MockGPTDataset
 from megatron.core.enums import ModelType
@@ -239,18 +247,37 @@ if __name__ == "__main__":
     # Temporary for transition to core datasets
     train_valid_test_datasets_provider.is_distributed = True
 
-    # Optionally enable inprocess restart on pretrain
+    # Optionally enable inprocess restart on pretrain (Megatron)
     pretrain, store = inprocess_restart.maybe_wrap_for_inprocess_restart(pretrain)
 
     extra_valid_datasets_provider.is_distributed = True ######## FlagScale ########
 
-    pretrain(
-        train_valid_test_datasets_provider,
-        partial(model_provider, gpt_builder),
-        ModelType.encoder_or_decoder,
-        forward_step,
-        args_defaults={'tokenizer_type': 'GPT2BPETokenizer'},
-        extra_args_provider=add_modelopt_args if has_nvidia_modelopt else None,
-        store=store,
-        extra_valid_dataset_provider=extra_valid_datasets_provider
-    )
+    ###### FlagScale Begin: In-process restart support ######
+    # Initialize FlagScale in-process restart wrapper if enabled via environment
+    _wrapper = None
+    if HAS_FLAGSCALE_RESTART and init_flagscale_restart is not None:
+        _wrapper = init_flagscale_restart()
+
+    def _run_pretrain():
+        """Wrapper function for pretrain that can be restarted."""
+        pretrain(
+            train_valid_test_datasets_provider,
+            partial(model_provider, gpt_builder),
+            ModelType.encoder_or_decoder,
+            forward_step,
+            args_defaults={'tokenizer_type': 'GPT2BPETokenizer'},
+            extra_args_provider=add_modelopt_args if has_nvidia_modelopt else None,
+            store=store,
+            extra_valid_dataset_provider=extra_valid_datasets_provider
+        )
+
+    # If FlagScale restart is enabled, wrap the entire pretrain with restart loop
+    if (_wrapper is not None and
+        hasattr(_wrapper, 'config') and
+        getattr(_wrapper.config, 'enable_restart', False)):
+        print(f"> FlagScale in-process restart enabled at pretrain level (max_restarts={_wrapper.config.max_restarts})")
+        _wrapper.run(_run_pretrain)
+    else:
+        # Direct call without restart
+        _run_pretrain()
+    ###### FlagScale End: In-process restart support ######
