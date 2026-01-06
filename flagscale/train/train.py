@@ -2722,6 +2722,15 @@ def train(
 
         iteration += 1
 
+        # ====== TEST CODE: Simulate fault for restart testing ======
+        # TODO: Remove this after testing
+        _fault_marker_file = "/tmp/flagscale_test_fault_triggered"
+        if iteration == 10 and not os.path.exists(_fault_marker_file):
+            with open(_fault_marker_file, 'w') as f:
+                f.write(str(iteration))
+            raise RuntimeError("Simulated fault for testing restart")
+        # ====== END TEST CODE ======
+
         # FlagScale: Send heartbeat ping for in-process monitoring
         if HAS_IN_PROCESS_MONITOR and in_process_ping is not None:
             in_process_ping(iteration=iteration)
