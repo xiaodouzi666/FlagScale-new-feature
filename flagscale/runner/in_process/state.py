@@ -45,7 +45,7 @@ class RankState:
         mode: Current operational mode
         health_status: Current health status
         iteration: Current training iteration
-        restart_iteration: Number of restart attempts
+        restart_attempt: Number of restart attempts
         last_heartbeat: Timestamp of last heartbeat
         fault_count: Number of faults detected on this rank
         metrics: Additional metrics/metadata
@@ -60,7 +60,7 @@ class RankState:
     mode: RankMode = RankMode.INITIALIZED
     health_status: HealthStatus = HealthStatus.UNKNOWN
     iteration: int = 0
-    restart_iteration: int = 0
+    restart_attempt: int = 0
     last_heartbeat: float = 0.0
     fault_count: int = 0
     metrics: Dict[str, Any] = field(default_factory=dict)
@@ -94,7 +94,7 @@ class RankState:
         )
 
     def advance(self, reason: str = None) -> None:
-        """Advance to next restart iteration.
+        """Advance to next restart attempt.
 
         This method is called when a restart is triggered to prepare
         for the next attempt.
@@ -102,7 +102,7 @@ class RankState:
         Args:
             reason: Optional reason for the restart
         """
-        self.restart_iteration += 1
+        self.restart_attempt += 1
         self.mode = RankMode.INITIALIZED
         self.health_status = HealthStatus.UNKNOWN
         self.exception = None
@@ -156,7 +156,7 @@ class RankState:
             "mode": self.mode.value,
             "health_status": self.health_status.value,
             "iteration": self.iteration,
-            "restart_iteration": self.restart_iteration,
+            "restart_attempt": self.restart_attempt,
             "last_heartbeat": self.last_heartbeat,
             "fault_count": self.fault_count,
             "metrics": self.metrics,
@@ -174,7 +174,7 @@ class RankState:
             local_rank=data.get("local_rank", 0),
             node_rank=data.get("node_rank", 0),
             iteration=data.get("iteration", 0),
-            restart_iteration=data.get("restart_iteration", 0),
+            restart_attempt=data.get("restart_attempt", 0),
             last_heartbeat=data.get("last_heartbeat", 0.0),
             fault_count=data.get("fault_count", 0),
             metrics=data.get("metrics", {}),
@@ -206,7 +206,7 @@ class FrozenRankState:
     mode: RankMode
     health_status: HealthStatus
     iteration: int
-    restart_iteration: int
+    restart_attempt: int
     last_heartbeat: float
     fault_count: int
     metrics: tuple  # Frozen version of metrics dict
@@ -227,7 +227,7 @@ class FrozenRankState:
             mode=state.mode,
             health_status=state.health_status,
             iteration=state.iteration,
-            restart_iteration=state.restart_iteration,
+            restart_attempt=state.restart_attempt,
             last_heartbeat=state.last_heartbeat,
             fault_count=state.fault_count,
             metrics=frozen_metrics,

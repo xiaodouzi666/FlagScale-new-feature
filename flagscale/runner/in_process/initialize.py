@@ -88,9 +88,9 @@ class RetryController(Initialize):
             True if restart should continue, False otherwise
         """
         # Check max restarts
-        if self.max_restarts > 0 and state.restart_iteration >= self.max_restarts:
+        if self.max_restarts > 0 and state.restart_attempt >= self.max_restarts:
             logger.warning(
-                f"Max restarts exceeded: {state.restart_iteration} >= {self.max_restarts}"
+                f"Max restarts exceeded: {state.restart_attempt} >= {self.max_restarts}"
             )
             return False
 
@@ -144,14 +144,14 @@ class RetryController(Initialize):
         if not self.should_continue(state):
             raise RestartAbort(
                 reason=self._get_abort_reason(state),
-                restart_count=state.restart_iteration,
+                restart_count=state.restart_attempt,
             )
 
         # Record this restart attempt
         self.record_restart()
 
         logger.info(
-            f"Restart iteration {state.restart_iteration + 1}"
+            f"Restart attempt {state.restart_attempt + 1}"
             + (f"/{self.max_restarts}" if self.max_restarts > 0 else "")
             + f" for rank {state.rank}"
         )
@@ -169,7 +169,7 @@ class RetryController(Initialize):
         """
         reasons = []
 
-        if self.max_restarts > 0 and state.restart_iteration >= self.max_restarts:
+        if self.max_restarts > 0 and state.restart_attempt >= self.max_restarts:
             reasons.append(f"max restarts ({self.max_restarts}) exceeded")
 
         if state.world_size < self.min_world_size:
@@ -311,11 +311,11 @@ class RestartConfig:
     exponential_backoff: bool = True
     max_restart_delay: float = 60.0
 
-    def get_delay(self, restart_iteration: int) -> float:
-        """Get the delay for the given restart iteration.
+    def get_delay(self, restart_attempt: int) -> float:
+        """Get the delay for the given restart attempt.
 
         Args:
-            restart_iteration: Current restart iteration
+            restart_attempt: Current restart attempt
 
         Returns:
             Delay in seconds
@@ -323,7 +323,7 @@ class RestartConfig:
         if not self.exponential_backoff:
             return self.restart_delay
 
-        delay = self.restart_delay * (2 ** restart_iteration)
+        delay = self.restart_delay * (2 ** restart_attempt)
         return min(delay, self.max_restart_delay)
 
 

@@ -123,11 +123,11 @@ class WrapperConfig:
         """Create config from dictionary."""
         return cls(**{k: v for k, v in config.items() if hasattr(cls, k)})
 
-    def get_restart_delay(self, restart_iteration: int) -> float:
-        """Get the delay for the given restart iteration.
+    def get_restart_delay(self, restart_attempt: int) -> float:
+        """Get the delay for the given restart attempt.
 
         Args:
-            restart_iteration: Current restart iteration
+            restart_attempt: Current restart attempt
 
         Returns:
             Delay in seconds
@@ -135,7 +135,7 @@ class WrapperConfig:
         if not self.exponential_backoff:
             return self.restart_delay
 
-        delay = self.restart_delay * (2 ** restart_iteration)
+        delay = self.restart_delay * (2 ** restart_attempt)
         return min(delay, self.max_restart_delay)
 
 
@@ -525,24 +525,24 @@ class Wrapper:
                 # 1. Check if we should continue (retry controller)
                 if not self._retry_controller.should_continue(frozen_state):
                     raise RestartAbort(
-                        reason=f"Retry limit reached after {self._state.restart_iteration} attempts",
-                        restart_count=self._state.restart_iteration,
+                        reason=f"Retry limit reached after {self._state.restart_attempt} attempts",
+                        restart_count=self._state.restart_attempt,
                     )
 
                 # Log restart attempt
-                if self._state.restart_iteration > 0:
+                if self._state.restart_attempt > 0:
                     logger.info(
-                        f"Rank {self.rank}: Restart attempt {self._state.restart_iteration}"
+                        f"Rank {self.rank}: Restart attempt {self._state.restart_attempt}"
                         f"/{self.config.max_restarts if self.config.max_restarts > 0 else '∞'}"
                     )
                     if self.on_restart:
                         self.on_restart(
-                            self._state.restart_iteration,
+                            self._state.restart_attempt,
                             self._state.last_restart_reason or "unknown",
                         )
 
                     # Apply restart delay with exponential backoff
-                    delay = self.config.get_restart_delay(self._state.restart_iteration - 1)
+                    delay = self.config.get_restart_delay(self._state.restart_attempt - 1)
                     if delay > 0:
                         logger.debug(f"Waiting {delay:.1f}s before restart...")
                         time.sleep(delay)
@@ -616,11 +616,11 @@ class Wrapper:
             except Exception as e:
                 logger.warning(f"Rank {self.rank}: Abort handler error: {e}")
 
-        # Advance to next restart iteration
+        # Advance to next restart attempt
         self._state.advance(reason)
 
         logger.info(
-            f"Rank {self.rank}: Prepared for restart iteration {self._state.restart_iteration}"
+            f"Rank {self.rank}: Prepared for restart attempt {self._state.restart_attempt}"
         )
 
     def trigger_restart(self, reason: str, error: Exception = None) -> None:
