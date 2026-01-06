@@ -2724,11 +2724,14 @@ def train(
 
         # ====== TEST CODE: Simulate fault for restart testing ======
         # TODO: Remove this after testing
-        _fault_marker_file = "/tmp/flagscale_test_fault_triggered"
+        # Use per-rank marker file to ensure all ranks trigger error simultaneously
+        import torch.distributed as _test_dist
+        _test_rank = _test_dist.get_rank() if _test_dist.is_initialized() else 0
+        _fault_marker_file = f"/tmp/flagscale_test_fault_triggered_rank{_test_rank}"
         if iteration == 10 and not os.path.exists(_fault_marker_file):
             with open(_fault_marker_file, 'w') as f:
                 f.write(str(iteration))
-            raise RuntimeError("Simulated fault for testing restart")
+            raise RuntimeError(f"Simulated fault for testing restart (rank {_test_rank})")
         # ====== END TEST CODE ======
 
         # FlagScale: Send heartbeat ping for in-process monitoring
