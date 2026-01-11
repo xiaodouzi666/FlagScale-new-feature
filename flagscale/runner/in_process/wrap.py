@@ -40,6 +40,7 @@ from typing import Any, Callable, Dict, List, Optional, Union
 
 from .abort import Abort, ComposedAbort, AbortTorchDistributed, AbortCUDA, create_default_abort_handler
 from .exception import HealthCheckError, MonitorError, RankShouldRestart, RestartAbort
+from .restart_sync import RestartCoordinator, create_restart_coordinator
 from .initialize import RetryController, RestartConfig, create_default_retry_controller
 from .health_check import (
     ChainedHealthCheck,
@@ -117,6 +118,9 @@ class WrapperConfig:
     restart_delay: float = 1.0
     exponential_backoff: bool = True
     max_restart_delay: float = 60.0
+
+    # Cross-rank synchronization for restart
+    restart_sync_barrier_timeout: float = 120.0  # Timeout for restart sync barriers
 
     @classmethod
     def from_dict(cls, config: Dict[str, Any]) -> "WrapperConfig":
@@ -261,6 +265,7 @@ class Wrapper:
         self._state = RankState.from_env()
         self._retry_controller: Optional[RetryController] = None
         self._abort_handler: Optional[Abort] = None
+        self._restart_coordinator: Optional[RestartCoordinator] = None
 
         # Initialize restart components if enabled
         if self.config.enable_restart:
@@ -269,6 +274,13 @@ class Wrapper:
                 min_world_size=self.config.min_world_size,
             )
             self._abort_handler = create_default_abort_handler()
+
+            # Initialize RestartCoordinator for cross-rank synchronization
+            self._restart_coordinator = create_restart_coordinator(
+                rank=self.rank,
+                world_size=self.world_size,
+                timeout=self.config.restart_sync_barrier_timeout,
+            )
 
         # State
         self._monitor: Optional[InProcessMonitor] = None
@@ -388,11 +400,15 @@ class Wrapper:
         """Send a heartbeat ping.
 
         Call this periodically in training to update progress.
+        Also checks if any peer rank has requested restart (passive sync).
 
         Args:
             iteration: Current training iteration
             phase: Current training phase
             metrics: Additional metrics to record
+
+        Raises:
+            RankShouldRestart: If a peer rank has requested restart
         """
         if not self._started or not self._monitor:
             return
@@ -404,6 +420,20 @@ class Wrapper:
 
         if self.on_iteration and iteration is not None:
             self.on_iteration(iteration)
+
+        # Check if any peer rank has requested restart (passive sync)
+        if self._restart_coordinator is not None:
+            if self._restart_coordinator.restart_requested(self._state.restart_attempt):
+                reason = self._restart_coordinator.get_reason(self._state.restart_attempt)
+                logger.info(
+                    f"Rank {self.rank}: Detected peer restart request (attempt {self._state.restart_attempt}), "
+                    f"reason: {reason}"
+                )
+                raise RankShouldRestart(
+                    reason=f"Peer restart: {reason}",
+                    rank=self.rank,
+                    fault_type="peer_restart",
+                )
 
     def enter_checkpoint_phase(self) -> None:
         """Signal entering checkpoint save/load phase."""
@@ -563,6 +593,16 @@ class Wrapper:
                 # 5. Restart triggered by fault detection
                 logger.warning(f"Rank {self.rank}: Restart triggered: {e.reason}")
                 last_error = e.original_error
+
+                # Broadcast restart request to peers (if not already from peer)
+                if self._restart_coordinator is not None and e.fault_type != "peer_restart":
+                    self._restart_coordinator.request_restart(
+                        attempt=self._state.restart_attempt,
+                        rank=self.rank,
+                        reason=e.reason,
+                        iteration=self._iteration,
+                    )
+
                 self._handle_restart(e.reason, e.original_error)
                 continue
 
@@ -578,6 +618,16 @@ class Wrapper:
                         f"Rank {self.rank}: Exception caught, triggering restart: {e}"
                     )
                     last_error = e
+
+                    # Broadcast restart request to peers
+                    if self._restart_coordinator is not None:
+                        self._restart_coordinator.request_restart(
+                            attempt=self._state.restart_attempt,
+                            rank=self.rank,
+                            reason=f"Exception: {type(e).__name__}",
+                            iteration=self._iteration,
+                        )
+
                     self._handle_restart(f"Exception: {type(e).__name__}", e)
                     continue
                 else:
@@ -595,6 +645,7 @@ class Wrapper:
         """Handle a restart event.
 
         This method performs cleanup and prepares for the next restart attempt.
+        Uses barriers to synchronize all ranks during restart.
 
         Args:
             reason: Reason for the restart
@@ -606,6 +657,20 @@ class Wrapper:
         # Stop monitoring
         self.stop()
 
+        # Barrier 1: Wait for all ranks to detect fault before cleanup
+        # This ensures no rank starts cleanup while others are still running
+        if self._restart_coordinator is not None:
+            logger.info(f"Rank {self.rank}: Waiting at fault_detected barrier...")
+            barrier_ok = self._restart_coordinator.barrier(
+                name="fault_detected",
+                attempt=self._state.restart_attempt,
+                timeout_s=self.config.restart_sync_barrier_timeout,
+            )
+            if not barrier_ok:
+                logger.warning(
+                    f"Rank {self.rank}: fault_detected barrier timeout, proceeding anyway"
+                )
+
         # Get frozen state for abort handlers
         frozen_state = FrozenRankState.from_state(self._state)
 
@@ -615,6 +680,20 @@ class Wrapper:
                 self._abort_handler(frozen_state)
             except Exception as e:
                 logger.warning(f"Rank {self.rank}: Abort handler error: {e}")
+
+        # Barrier 2: Wait for all ranks to complete cleanup before restarting
+        # This ensures no rank starts reinitializing while others are still cleaning up
+        if self._restart_coordinator is not None:
+            logger.info(f"Rank {self.rank}: Waiting at abort_done barrier...")
+            barrier_ok = self._restart_coordinator.barrier(
+                name="abort_done",
+                attempt=self._state.restart_attempt,
+                timeout_s=self.config.restart_sync_barrier_timeout,
+            )
+            if not barrier_ok:
+                logger.warning(
+                    f"Rank {self.rank}: abort_done barrier timeout, proceeding anyway"
+                )
 
         # Advance to next restart attempt
         self._state.advance(reason)
@@ -636,6 +715,18 @@ class Wrapper:
         Raises:
             RankShouldRestart: Always raised to trigger the restart
         """
+        # Broadcast restart request to peers before raising exception
+        if self._restart_coordinator is not None:
+            self._restart_coordinator.request_restart(
+                attempt=self._state.restart_attempt,
+                rank=self.rank,
+                reason=reason,
+                iteration=self._iteration,
+            )
+            logger.info(
+                f"Rank {self.rank}: Broadcast manual restart request: {reason}"
+            )
+
         raise RankShouldRestart(
             reason=reason,
             rank=self.rank,

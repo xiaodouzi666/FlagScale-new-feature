@@ -138,6 +138,12 @@ from .initialize import (
     create_default_retry_controller,
 )
 
+# Restart synchronization (cross-rank coordination)
+from .restart_sync import (
+    RestartCoordinator,
+    create_restart_coordinator,
+)
+
 # Wrapper
 from .wrap import (
     CallWrapper,
@@ -226,6 +232,9 @@ __all__ = [
     "ComposedInitialize",
     "RestartConfig",
     "create_default_retry_controller",
+    # Restart synchronization (cross-rank coordination)
+    "RestartCoordinator",
+    "create_restart_coordinator",
     # Wrapper
     "Wrapper",
     "WrapperConfig",
