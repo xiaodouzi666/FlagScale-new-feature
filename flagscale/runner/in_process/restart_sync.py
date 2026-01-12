@@ -79,9 +79,13 @@ class RestartCoordinator:
 
         self._store = None
         self._initialized = False
+        self._init_failed = False
 
     def _ensure_store(self) -> bool:
         """Ensure TCPStore is initialized.
+
+        Note: TCPStore initialization is deferred and lazy. It will be
+        created on first actual use to avoid blocking during Wrapper init.
 
         Returns:
             True if store is available, False otherwise
@@ -89,35 +93,42 @@ class RestartCoordinator:
         if self._store is not None:
             return True
 
+        if self._init_failed:
+            # Don't retry if init already failed
+            return False
+
         try:
             import torch.distributed as dist
 
             # Rank 0 is the master (creates the store)
             is_master = (self.rank == 0)
 
-            logger.debug(
+            logger.info(
                 f"Rank {self.rank}: Creating TCPStore "
                 f"(master={is_master}, addr={self.master_addr}:{self.store_port})"
             )
 
+            # Use wait_for_workers=False to avoid blocking
+            # Each rank will connect when ready
             self._store = dist.TCPStore(
                 host_name=self.master_addr,
                 port=self.store_port,
                 world_size=self.world_size,
                 is_master=is_master,
                 timeout=timedelta(seconds=self.timeout),
-                wait_for_workers=True,
+                wait_for_workers=False,  # Don't block waiting for all workers
             )
 
             self._initialized = True
             logger.info(
-                f"Rank {self.rank}: RestartCoordinator initialized "
+                f"Rank {self.rank}: RestartCoordinator TCPStore ready "
                 f"(store={self.master_addr}:{self.store_port})"
             )
             return True
 
         except Exception as e:
             logger.warning(f"Rank {self.rank}: Failed to initialize TCPStore: {e}")
+            self._init_failed = True
             return False
 
     def request_restart(
