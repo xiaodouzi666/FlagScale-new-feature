@@ -67,7 +67,8 @@ class RestartCoordinator:
         self.master_addr = master_addr or os.environ.get("MASTER_ADDR", "127.0.0.1")
         self.master_port = int(master_port or os.environ.get("MASTER_PORT", 29500))
 
-        # Store port: use dedicated env var, or master_port + 1
+        # Store port: use dedicated env var, or master_port + 100
+        # Using +100 offset to avoid conflicts with PyTorch distributed internal ports
         if store_port is not None:
             self.store_port = store_port
         else:
@@ -75,7 +76,7 @@ class RestartCoordinator:
             if env_store_port:
                 self.store_port = int(env_store_port)
             else:
-                self.store_port = self.master_port + 1
+                self.store_port = self.master_port + 100
 
         self._store = None
         self._initialized = False
