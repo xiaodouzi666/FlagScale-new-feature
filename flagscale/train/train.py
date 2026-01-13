@@ -832,6 +832,11 @@ def pretrain(
         ft_integration.setup(args)
         ft_integration.maybe_setup_simulated_fault()
 
+    # Initialize in-process monitoring (from environment variables)
+    # This enables heartbeat monitoring, health checks, and optional restart on fault
+    if HAS_IN_PROCESS_MONITOR and init_in_process_monitoring is not None:
+        init_in_process_monitoring()
+
     # Set pytorch JIT layer fusion options and warmup JIT functions.
     set_jit_fusion_options()
 
