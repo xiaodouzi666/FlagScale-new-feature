@@ -282,6 +282,12 @@ class Wrapper:
                 timeout=self.config.restart_sync_barrier_timeout,
             )
 
+            # Rank 0 eagerly initializes the TCPStore server
+            # This ensures the server is ready before other ranks try to connect
+            if self.rank == 0 and self._restart_coordinator is not None:
+                logger.info("Rank 0: Eagerly initializing RestartCoordinator TCPStore...")
+                self._restart_coordinator._ensure_store()
+
         # State
         self._monitor: Optional[InProcessMonitor] = None
         self._started = False

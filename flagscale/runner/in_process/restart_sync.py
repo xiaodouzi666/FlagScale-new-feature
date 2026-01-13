@@ -88,6 +88,9 @@ class RestartCoordinator:
         Note: TCPStore initialization is deferred and lazy. It will be
         created on first actual use to avoid blocking during Wrapper init.
 
+        For non-master ranks, we retry connection in case rank 0 hasn't
+        created the server yet (race condition).
+
         Returns:
             True if store is available, False otherwise
         """
@@ -98,39 +101,58 @@ class RestartCoordinator:
             # Don't retry if init already failed
             return False
 
-        try:
-            import torch.distributed as dist
+        import torch.distributed as dist
 
-            # Rank 0 is the master (creates the store)
-            is_master = (self.rank == 0)
+        # Rank 0 is the master (creates the store)
+        is_master = (self.rank == 0)
 
-            logger.info(
-                f"Rank {self.rank}: Creating TCPStore "
-                f"(master={is_master}, addr={self.master_addr}:{self.store_port})"
-            )
+        # Non-master ranks may need to retry if master hasn't created store yet
+        max_retries = 1 if is_master else 10
+        retry_delay = 2.0  # seconds between retries
 
-            # Use wait_for_workers=False to avoid blocking
-            # Each rank will connect when ready
-            self._store = dist.TCPStore(
-                host_name=self.master_addr,
-                port=self.store_port,
-                world_size=self.world_size,
-                is_master=is_master,
-                timeout=timedelta(seconds=self.timeout),
-                wait_for_workers=False,  # Don't block waiting for all workers
-            )
+        for attempt in range(max_retries):
+            try:
+                if attempt > 0:
+                    logger.info(
+                        f"Rank {self.rank}: Retrying TCPStore connection "
+                        f"(attempt {attempt + 1}/{max_retries})"
+                    )
 
-            self._initialized = True
-            logger.info(
-                f"Rank {self.rank}: RestartCoordinator TCPStore ready "
-                f"(store={self.master_addr}:{self.store_port})"
-            )
-            return True
+                logger.info(
+                    f"Rank {self.rank}: Creating TCPStore "
+                    f"(master={is_master}, addr={self.master_addr}:{self.store_port})"
+                )
 
-        except Exception as e:
-            logger.warning(f"Rank {self.rank}: Failed to initialize TCPStore: {e}")
-            self._init_failed = True
-            return False
+                # Use wait_for_workers=False to avoid blocking
+                # Each rank will connect when ready
+                self._store = dist.TCPStore(
+                    host_name=self.master_addr,
+                    port=self.store_port,
+                    world_size=self.world_size,
+                    is_master=is_master,
+                    timeout=timedelta(seconds=30),  # Short timeout for connection
+                    wait_for_workers=False,  # Don't block waiting for all workers
+                )
+
+                self._initialized = True
+                logger.info(
+                    f"Rank {self.rank}: RestartCoordinator TCPStore ready "
+                    f"(store={self.master_addr}:{self.store_port})"
+                )
+                return True
+
+            except Exception as e:
+                if attempt < max_retries - 1:
+                    logger.debug(
+                        f"Rank {self.rank}: TCPStore connection attempt {attempt + 1} failed: {e}"
+                    )
+                    time.sleep(retry_delay)
+                else:
+                    logger.warning(f"Rank {self.rank}: Failed to initialize TCPStore: {e}")
+                    self._init_failed = True
+                    return False
+
+        return False
 
     def request_restart(
         self,
