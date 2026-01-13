@@ -120,7 +120,8 @@ class WrapperConfig:
     max_restart_delay: float = 60.0
 
     # Cross-rank synchronization for restart
-    restart_sync_barrier_timeout: float = 120.0  # Timeout for restart sync barriers
+    # Use a longer timeout for multi-node scenarios and slow cleanup operations
+    restart_sync_barrier_timeout: float = 300.0  # Timeout for restart sync barriers
 
     @classmethod
     def from_dict(cls, config: Dict[str, Any]) -> "WrapperConfig":
@@ -609,20 +610,8 @@ class Wrapper:
                         iteration=self._iteration,
                     )
 
-                # Wait for all ranks to detect the restart request before cleanup
-                # This prevents rank 0 from destroying process groups while others are still running
-                if self._restart_coordinator is not None:
-                    logger.info(f"Rank {self.rank}: Waiting at restart_requested barrier...")
-                    barrier_ok = self._restart_coordinator.barrier(
-                        name="restart_requested",
-                        attempt=self._state.restart_attempt,
-                        timeout_s=self.config.restart_sync_barrier_timeout,
-                    )
-                    if not barrier_ok:
-                        logger.warning(
-                            f"Rank {self.rank}: restart_requested barrier timeout, proceeding anyway"
-                        )
-
+                # Note: Synchronization barriers are handled in _handle_restart()
+                # to avoid duplicate barrier points
                 self._handle_restart(e.reason, e.original_error)
                 continue
 
@@ -648,19 +637,8 @@ class Wrapper:
                             iteration=self._iteration,
                         )
 
-                    # Wait for all ranks to detect the restart request before cleanup
-                    if self._restart_coordinator is not None:
-                        logger.info(f"Rank {self.rank}: Waiting at restart_requested barrier...")
-                        barrier_ok = self._restart_coordinator.barrier(
-                            name="restart_requested",
-                            attempt=self._state.restart_attempt,
-                            timeout_s=self.config.restart_sync_barrier_timeout,
-                        )
-                        if not barrier_ok:
-                            logger.warning(
-                                f"Rank {self.rank}: restart_requested barrier timeout, proceeding anyway"
-                            )
-
+                    # Note: Synchronization barriers are handled in _handle_restart()
+                    # to avoid duplicate barrier points
                     self._handle_restart(f"Exception: {type(e).__name__}", e)
                     continue
                 else:
