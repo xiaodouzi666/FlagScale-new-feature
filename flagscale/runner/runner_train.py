@@ -199,6 +199,15 @@ def _get_runner_cmd_train(
         del runner_args["enable_monitoring"]
     if "enable_in_process_monitoring" in runner_args:
         del runner_args["enable_in_process_monitoring"]
+    # If in-process restart is enabled, disable torchrun elastic restarts.
+    # Otherwise elastic will re-rendezvous and try to re-bind rdzv_endpoint, causing EADDRINUSE.
+    in_process_cfg = runner_config.get("in_process", {}) or {}
+    if bool(in_process_cfg.get("enable_restart", False)):
+        runner_args["max_restarts"] = 0
+        # Disable monitor_interval to reduce elastic interference
+        if "monitor_interval" in runner_args:
+            runner_args["monitor_interval"] = 0
+
     if "in_process" in runner_args:
         del runner_args["in_process"]
     runner_args["rdzv_id"] = rdzv_id
