@@ -2735,10 +2735,14 @@ def train(
         # ====== TEST CODE: Simulate fault for restart testing (single rank) ======
         # TODO: Remove this after testing
         _fault_marker_file = "/tmp/flagscale_test_fault_triggered"
-        if iteration == 10 and args.rank == 0 and not os.path.exists(_fault_marker_file):
-            with open(_fault_marker_file, 'w') as f:
-                f.write(str(iteration))
-            raise RuntimeError("Simulated fault for testing restart (rank 0 only)")
+        # Debug: print condition check on rank 0
+        if iteration == 10:
+            _file_exists = os.path.exists(_fault_marker_file)
+            print(f"[DEBUG RESTART TEST] iteration={iteration}, args.rank={args.rank}, file_exists={_file_exists}, file={_fault_marker_file}")
+            if args.rank == 0 and not _file_exists:
+                with open(_fault_marker_file, 'w') as f:
+                    f.write(str(iteration))
+                raise RuntimeError("Simulated fault for testing restart (rank 0 only)")
         # ====== END TEST CODE ======
 
         # FlagScale: Send heartbeat ping for in-process monitoring
