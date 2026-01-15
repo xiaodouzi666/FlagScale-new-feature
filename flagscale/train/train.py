@@ -800,11 +800,6 @@ def pretrain(
             it is automatically injected when in-process restart is in use
     """
 
-    # Set CUDA device early to avoid NCCL barrier "devices unknown" warning
-    # This must happen before any distributed operations
-    if torch.cuda.is_available() and "LOCAL_RANK" in os.environ:
-        torch.cuda.set_device(int(os.environ["LOCAL_RANK"]))
-
     if inprocess_call_wrapper is not None:
         iteration = inprocess_call_wrapper.iteration
         store = torch.distributed.PrefixStore(str(iteration), store)
