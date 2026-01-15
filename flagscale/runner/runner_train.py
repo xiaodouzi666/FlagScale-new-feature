@@ -314,14 +314,6 @@ def _generate_run_script_train(
             if in_process_config.get("restart_on_exception") is not None:
                 val = "1" if in_process_config.restart_on_exception else "0"
                 f.write(f"export FLAGSCALE_RESTART_ON_EXCEPTION={val}\n")
-            # Manual restart trigger file (for testing)
-            if in_process_config.get("enable_restart"):
-                trigger_file = os.path.join(system_config.logging.log_dir, "restart_trigger")
-                f.write(f"export FLAGSCALE_RESTART_TRIGGER_FILE={trigger_file}\n")
-                # Auto trigger delay for testing (optional, set via config or env)
-                auto_delay = in_process_config.get("restart_auto_trigger_delay", 0)
-                if auto_delay > 0:
-                    f.write(f"export FLAGSCALE_RESTART_AUTO_DELAY={auto_delay}\n")
             f.write(f"\n")
         f.write(f'cmd="{cmd}"\n')
         f.write(f"\n")
@@ -354,19 +346,6 @@ def _generate_run_script_train(
                 f.write(
                     f'nohup bash -c "$cmd; sync" >> {host_output_file} 2>&1 & echo $! > {host_pid_file}\n'
                 )
-                # Auto trigger restart for testing (only on node_rank 0)
-                if enable_in_process_monitoring and node_rank == 0:
-                    in_process_config = config.experiment.runner.get("in_process", {})
-                    if in_process_config.get("enable_restart") and in_process_config.get("restart_auto_trigger_delay", 0) > 0:
-                        f.write(f'\n')
-                        f.write(f'# Auto trigger restart once for testing\n')
-                        f.write(f'if [ -n "$FLAGSCALE_RESTART_TRIGGER_FILE" ] && [ -n "$FLAGSCALE_RESTART_AUTO_DELAY" ]; then\n')
-                        f.write(f'  (\n')
-                        f.write(f'    sleep "$FLAGSCALE_RESTART_AUTO_DELAY"\n')
-                        f.write(f'    echo "[auto-trigger] touching $FLAGSCALE_RESTART_TRIGGER_FILE"\n')
-                        f.write(f'    touch "$FLAGSCALE_RESTART_TRIGGER_FILE"\n')
-                        f.write(f'  ) &\n')
-                        f.write(f'fi\n')
             else:
                 f.write(f'bash -c "$cmd; sync" >> {host_output_file} 2>&1\n')
         f.write("\n")

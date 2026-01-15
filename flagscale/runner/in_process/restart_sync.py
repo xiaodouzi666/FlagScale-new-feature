@@ -82,31 +82,6 @@ class RestartCoordinator:
         self._initialized = False
         self._init_failed = False
 
-    def _check_key_exists(self, key: str) -> bool:
-        """Check if a key exists in the store (version-compatible).
-
-        Different PyTorch versions return different types from check():
-        - Some return List[bool]
-        - Some return bool directly
-
-        Args:
-            key: The key to check
-
-        Returns:
-            True if key exists, False otherwise
-        """
-        if self._store is None:
-            return False
-        try:
-            result = self._store.check([key])
-            # Handle both List[bool] and bool return types
-            if isinstance(result, bool):
-                return result
-            else:
-                return bool(result[0])
-        except Exception:
-            return False
-
     def _ensure_store(self) -> bool:
         """Ensure TCPStore is initialized.
 
@@ -215,12 +190,12 @@ class RestartCoordinator:
             value = f"{rank}|{iteration}|{reason}"
 
             # First-writer wins: only set if key doesn't exist
-            if not self._check_key_exists(key):
+            if not bool(self._store.check([key])[0]):
                 self._store.set(key, value)
 
             # Also store the reason separately for easy retrieval
             reason_key = f"{self.KEY_RESTART_REASON}/{attempt}"
-            if not self._check_key_exists(reason_key):
+            if not bool(self._store.check([reason_key])[0]):
                 self._store.set(reason_key, reason)
 
             logger.debug(
@@ -247,7 +222,7 @@ class RestartCoordinator:
         key = f"{self.KEY_RESTART_REQUEST}/{attempt}"
         try:
             # Use non-blocking check() instead of blocking get()
-            return self._check_key_exists(key)
+            return bool(self._store.check([key])[0])
         except Exception as e:
             logger.debug(f"Rank {self.rank}: Error checking restart request: {e}")
             return False
@@ -267,7 +242,7 @@ class RestartCoordinator:
         reason_key = f"{self.KEY_RESTART_REASON}/{attempt}"
         try:
             # First check if key exists (non-blocking), then get if it does
-            if not self._check_key_exists(reason_key):
+            if not bool(self._store.check([reason_key])[0]):
                 return None
             value = self._store.get(reason_key)  # Key exists, won't block
             if value:

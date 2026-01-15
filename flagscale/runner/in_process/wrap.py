@@ -293,7 +293,6 @@ class Wrapper:
         self._monitor: Optional[InProcessMonitor] = None
         self._started = False
         self._iteration = 0
-        self._in_restart_loop = False  # True when running via run_with_restart()
 
         # Set singleton
         Wrapper._instance = self
@@ -421,35 +420,6 @@ class Wrapper:
         if not self._started or not self._monitor:
             return
 
-        # Manual restart trigger via file (opt-in)
-        # Only rank 0 checks the trigger file; other ranks will follow via RestartCoordinator
-        trigger_file = os.environ.get("FLAGSCALE_RESTART_TRIGGER_FILE", "")
-        if trigger_file and self.rank == 0:
-            try:
-                if os.path.exists(trigger_file):
-                    logger.warning(
-                        f"Rank {self.rank}: Manual restart trigger file detected: {trigger_file}"
-                    )
-                    # Best-effort remove to make it one-shot
-                    try:
-                        os.remove(trigger_file)
-                    except Exception:
-                        pass
-                    # Only trigger restart if we're in a restart loop context
-                    if self._in_restart_loop:
-                        # Use the unified path: broadcast + raise RankShouldRestart
-                        self.trigger_restart(reason=f"Manual file trigger: {trigger_file}")
-                    else:
-                        logger.warning(
-                            f"Rank {self.rank}: Restart trigger detected but not in restart loop context. "
-                            f"To enable restart, use wrapper.run_with_restart() or run_with_restart=True."
-                        )
-            except RankShouldRestart:
-                # Re-raise RankShouldRestart so it propagates to the restart handler
-                raise
-            except Exception as e:
-                logger.warning(f"Rank {self.rank}: Manual trigger check failed: {e}")
-
         if iteration is not None:
             self._iteration = iteration
 
@@ -459,8 +429,7 @@ class Wrapper:
             self.on_iteration(iteration)
 
         # Check if any peer rank has requested restart (passive sync)
-        # Only check and raise if we're in a restart loop context
-        if self._in_restart_loop and self._restart_coordinator is not None:
+        if self._restart_coordinator is not None:
             if self._restart_coordinator.restart_requested(self._state.restart_attempt):
                 reason = self._restart_coordinator.get_reason(self._state.restart_attempt)
                 logger.info(
@@ -584,7 +553,6 @@ class Wrapper:
 
         result = None
         last_error = None
-        self._in_restart_loop = True  # Mark that we're in the restart loop context
 
         while True:
             # Get frozen state for checks
