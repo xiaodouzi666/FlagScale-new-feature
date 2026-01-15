@@ -420,6 +420,25 @@ class Wrapper:
         if not self._started or not self._monitor:
             return
 
+        # Manual restart trigger via file (opt-in)
+        # Only rank 0 checks the trigger file; other ranks will follow via RestartCoordinator
+        trigger_file = os.environ.get("FLAGSCALE_RESTART_TRIGGER_FILE", "")
+        if trigger_file and self.rank == 0:
+            try:
+                if os.path.exists(trigger_file):
+                    logger.warning(
+                        f"Rank {self.rank}: Manual restart trigger file detected: {trigger_file}"
+                    )
+                    # Best-effort remove to make it one-shot
+                    try:
+                        os.remove(trigger_file)
+                    except Exception:
+                        pass
+                    # Use the unified path: broadcast + raise RankShouldRestart
+                    self.trigger_restart(reason=f"Manual file trigger: {trigger_file}")
+            except Exception as e:
+                logger.warning(f"Rank {self.rank}: Manual trigger check failed: {e}")
+
         if iteration is not None:
             self._iteration = iteration
 
