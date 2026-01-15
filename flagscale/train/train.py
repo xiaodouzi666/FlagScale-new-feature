@@ -2740,6 +2740,8 @@ def train(
                     wrapper = Wrapper.get_instance()
                     if wrapper:
                         print_rank_0(f"!!! MANUALLY TRIGGERING RESTART AT STEP {iteration} !!!")
+                        # Prevent infinite loop: Unset trigger for the next in-process run
+                        os.environ["TRIGGER_RESTART_STEP"] = "-1"
                         wrapper.trigger_restart(f"Manual Test at step {iteration}")
                 except ImportError:
                     pass
