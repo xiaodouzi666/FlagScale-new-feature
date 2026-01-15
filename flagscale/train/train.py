@@ -2730,6 +2730,19 @@ def train(
         # FlagScale: Send heartbeat ping for in-process monitoring
         if HAS_IN_PROCESS_MONITOR and in_process_ping is not None:
             in_process_ping(iteration=iteration)
+            
+            # Helper logic for testing: Manual Restart Trigger
+            trigger_step = int(os.environ.get("TRIGGER_RESTART_STEP", -1))
+            if trigger_step > 0 and iteration == trigger_step:
+                # Import wrapper directly to access trigger method since it's not exposed via __init__ yet
+                try:
+                    from flagscale.runner.in_process.wrap import Wrapper
+                    wrapper = Wrapper.get_instance()
+                    if wrapper:
+                        print_rank_0(f"!!! MANUALLY TRIGGERING RESTART AT STEP {iteration} !!!")
+                        wrapper.trigger_restart(f"Manual Test at step {iteration}")
+                except ImportError:
+                    pass
 
         batch_size = (
             mpu.get_data_parallel_world_size() * args.micro_batch_size * get_num_microbatches()

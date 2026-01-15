@@ -190,12 +190,25 @@ class RestartCoordinator:
             value = f"{rank}|{iteration}|{reason}"
 
             # First-writer wins: only set if key doesn't exist
-            if not bool(self._store.check([key])[0]):
+            # Note: store.check() returns True/False directly in some versions, or list of bools in others
+            check_result = self._store.check([key])
+            if isinstance(check_result, list):
+                exists = check_result[0]
+            else:
+                exists = check_result
+            
+            if not exists:
                 self._store.set(key, value)
 
             # Also store the reason separately for easy retrieval
             reason_key = f"{self.KEY_RESTART_REASON}/{attempt}"
-            if not bool(self._store.check([reason_key])[0]):
+            check_result = self._store.check([reason_key])
+            if isinstance(check_result, list):
+                exists = check_result[0]
+            else:
+                exists = check_result
+
+            if not exists:
                 self._store.set(reason_key, reason)
 
             logger.debug(
