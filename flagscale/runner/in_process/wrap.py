@@ -436,6 +436,9 @@ class Wrapper:
                         pass
                     # Use the unified path: broadcast + raise RankShouldRestart
                     self.trigger_restart(reason=f"Manual file trigger: {trigger_file}")
+            except RankShouldRestart:
+                # Re-raise RankShouldRestart so it propagates to the restart handler
+                raise
             except Exception as e:
                 logger.warning(f"Rank {self.rank}: Manual trigger check failed: {e}")
 
