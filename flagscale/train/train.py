@@ -2739,10 +2739,15 @@ def train(
                     from flagscale.runner.in_process.wrap import Wrapper
                     wrapper = Wrapper.get_instance()
                     if wrapper:
-                        print_rank_0(f"!!! MANUALLY TRIGGERING RESTART AT STEP {iteration} !!!")
-                        # Prevent infinite loop: Unset trigger for the next in-process run
-                        os.environ["TRIGGER_RESTART_STEP"] = "-1"
-                        wrapper.trigger_restart(f"Manual Test at step {iteration}")
+                        # Prevent infinite loop: Only trigger on the FIRST attempt (restart_attempt == 0)
+                        # We access the internal _restart_attempt attribute or public property if available
+                        current_attempt = getattr(wrapper, 'restart_attempt', getattr(wrapper, '_restart_attempt', 0))
+                        
+                        if current_attempt == 0:
+                            print_rank_0(f"!!! MANUALLY TRIGGERING RESTART AT STEP {iteration} (Attempt {current_attempt}) !!!")
+                            wrapper.trigger_restart(f"Manual Test at step {iteration}")
+                        else:
+                             print_rank_0(f"!!! SKIP TRIGGERING RESTART AT STEP {iteration} (Already Restarted: {current_attempt}) !!!")
                 except ImportError:
                     pass
 
