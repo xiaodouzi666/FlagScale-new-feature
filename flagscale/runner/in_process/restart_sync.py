@@ -163,6 +163,7 @@ class RestartCoordinator:
         attempt: int,
         rank: int,
         reason: str,
+        initial_rank: int = -1,
         iteration: int = 0,
     ) -> bool:
         """Request a restart for the current attempt.
@@ -174,6 +175,7 @@ class RestartCoordinator:
             attempt: Current restart attempt number
             rank: Rank that is requesting restart
             reason: Reason for the restart
+            initial_rank: Initial (physical) rank index
             iteration: Current training iteration
 
         Returns:
@@ -186,8 +188,8 @@ class RestartCoordinator:
             # Key format: restart_request/<attempt>
             key = f"{self.KEY_RESTART_REQUEST}/{attempt}"
 
-            # Value format: <rank>|<iteration>|<reason>
-            value = f"{rank}|{iteration}|{reason}"
+            # Value format: <rank>|<initial_rank>|<iteration>|<reason>
+            value = f"{rank}|{initial_rank}|{iteration}|{reason}"
 
             # First-writer wins: only set if key doesn't exist
             # Note: store.check() returns True/False directly in some versions, or list of bools in others
@@ -249,20 +251,45 @@ class RestartCoordinator:
         Returns:
             Reason string or None if not found
         """
+        info = self.get_restart_info(attempt)
+        if info:
+            return info[3]
+        return None
+
+    def get_restart_info(self, attempt: int) -> Optional[tuple]:
+        """Get details about the restart request.
+
+        Args:
+            attempt: Current restart attempt number
+
+        Returns:
+            Tuple of (rank, initial_rank, iteration, reason) or None if not found
+        """
         if not self._ensure_store():
             return None
 
-        reason_key = f"{self.KEY_RESTART_REASON}/{attempt}"
+        key = f"{self.KEY_RESTART_REQUEST}/{attempt}"
         try:
-            # First check if key exists (non-blocking), then get if it does
-            if not bool(self._store.check([reason_key])[0]):
+            # First check if key exists (non-blocking)
+            if not bool(self._store.check([key])[0]):
                 return None
-            value = self._store.get(reason_key)  # Key exists, won't block
-            if value:
-                return value.decode() if isinstance(value, (bytes, bytearray)) else str(value)
+            
+            value = self._store.get(key)
+            if not value:
+                return None
+                
+            value_str = value.decode() if isinstance(value, (bytes, bytearray)) else str(value)
+            parts = value_str.split("|", 3)
+            # Handle new format (4 parts) and old format backward compatibility (3 parts)
+            if len(parts) >= 4:
+                return (int(parts[0]), int(parts[1]), int(parts[2]), parts[3])
+            elif len(parts) == 3:
+                # Old format: rank|iteration|reason - assume initial_rank unknown (-1)
+                return (int(parts[0]), -1, int(parts[1]), parts[2])
             return None
+            
         except Exception as e:
-            logger.debug(f"Rank {self.rank}: Error getting restart reason: {e}")
+            logger.debug(f"Rank {self.rank}: Error getting restart info: {e}")
             return None
 
     def barrier(

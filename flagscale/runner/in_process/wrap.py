@@ -63,6 +63,7 @@ from .heartbeat import (
 from .monitor import InProcessMonitor, MonitorEvent, MonitorEventRecord
 from .progress_watchdog import ProgressWatchdog
 from .state import FrozenRankState, HealthStatus, RankMode, RankState
+from .rank_assignment import RankAssignmentCtx, MaxActiveWorldSize, SimpleRankAssignment
 
 logger = logging.getLogger(__name__)
 
@@ -111,6 +112,7 @@ class WrapperConfig:
     enable_restart: bool = False
     max_restarts: int = 3
     min_world_size: int = 1
+    max_active_world_size: Optional[int] = None
     restart_on_health_check_fail: bool = True
     restart_on_heartbeat_timeout: bool = True
     restart_on_hang: bool = True
@@ -193,6 +195,7 @@ class Wrapper:
         enable_restart: bool = None,
         max_restarts: int = None,
         min_world_size: int = None,
+        max_active_world_size: int = None,
         restart_on_exception: bool = None,
         # Watchdog configuration
         enable_watchdog: bool = None,
@@ -257,6 +260,8 @@ class Wrapper:
             self.config.max_restarts = max_restarts
         if min_world_size is not None:
             self.config.min_world_size = min_world_size
+        if max_active_world_size is not None:
+            self.config.max_active_world_size = max_active_world_size
         if restart_on_exception is not None:
             self.config.restart_on_exception = restart_on_exception
         if enable_watchdog is not None:
@@ -280,6 +285,7 @@ class Wrapper:
         self._retry_controller: Optional[RetryController] = None
         self._abort_handler: Optional[Abort] = None
         self._restart_coordinator: Optional[RestartCoordinator] = None
+        self._terminated_ranks: Set[int] = set()
 
         # Initialize restart components if enabled
         if self.config.enable_restart:
@@ -597,8 +603,57 @@ class Wrapper:
 
         result = None
         last_error = None
+        # self._terminated_ranks is initialized in __init__
 
         while True:
+            # 0. Rank Assignment Phase
+            # We determine if we should participate in this attempt
+            assigned_ctx = RankAssignmentCtx(
+                state=self._state,
+                terminated_ranks=self._terminated_ranks.copy(),
+            )
+            
+            # Select strategy
+            if self.config.max_active_world_size is not None:
+                assignment_strategy = MaxActiveWorldSize(self.config.max_active_world_size)
+            else:
+                assignment_strategy = SimpleRankAssignment()
+                
+            assigned_ctx = assignment_strategy(assigned_ctx)
+            
+            # Apply assignment
+            self._state = assigned_ctx.state
+            
+            # If terminated, we should stop (or wait? usually terminated means dead/faulty)
+            if self._state.mode == RankMode.TERMINATED:
+                logger.error(f"Rank {self.rank}: Marked as TERMINATED. Exiting.")
+                raise RestartAbort("Rank terminated by assignment", self._state.restart_attempt)
+
+            # If INACTIVE (spare), we wait for next restart
+            if self._state.mode == RankMode.INACTIVE:
+                logger.info(f"Rank {self.rank}: Assigned INACTIVE (spare). Waiting for next restart...")
+                try:
+                    # Wait for restart signal from active ranks
+                    if self._restart_coordinator:
+                         # Poll until restart is requested
+                         while True:
+                             if self._restart_coordinator.restart_requested(self._state.restart_attempt):
+                                 logger.info(f"Rank {self.rank}: Restart requested while INACTIVE")
+                                 # Raise special exception to trigger restart handling logic
+                                 raise RankShouldRestart(
+                                     reason="Spare activation",
+                                     rank=self.rank,
+                                     fault_type="spare_activation"
+                                 )
+                             time.sleep(1.0)
+                except RankShouldRestart:
+                    raise # Re-raise to be caught by outer loop
+                except Exception as e:
+                    logger.error(f"In-process spare wait error: {e}")
+                    # If waiting failed, maybe we should just crash or retry?
+                    # Let's treat it as a fault
+                    raise RankShouldRestart(f"Spare wait error: {e}", e, "spare_error")
+
             # Get frozen state for checks
             frozen_state = FrozenRankState.from_state(self._state)
 
@@ -640,11 +695,16 @@ class Wrapper:
                        logger.warning(f"Rank {self.rank}: Failed to rotate port: {e}")
 
                 # 2. Start monitoring
+                # IMPORTANT: Update environment for logical rank
+                if self._state.mode == RankMode.ACTIVE:
+                    os.environ["RANK"] = str(self._state.rank)
+                    os.environ["WORLD_SIZE"] = str(self._state.active_world_size)
+                
                 self.start()
                 self.enter_initialization_phase()
 
                 # 3. Execute the training function
-                self._state.set_mode(RankMode.ACTIVE)
+                # self._state.set_mode(RankMode.ACTIVE) # Already set by assignment
                 self.exit_initialization_phase()
                 result = fn(*args, **kwargs)
 
@@ -664,6 +724,7 @@ class Wrapper:
                         attempt=self._state.restart_attempt,
                         rank=self.rank,
                         reason=e.reason,
+                        initial_rank=self._state.initial_rank,
                         iteration=self._iteration,
                     )
 
@@ -686,11 +747,13 @@ class Wrapper:
                     last_error = e
 
                     # Broadcast restart request to peers
+                    # Broadcast restart request to peers
                     if self._restart_coordinator is not None:
                         self._restart_coordinator.request_restart(
                             attempt=self._state.restart_attempt,
                             rank=self.rank,
                             reason=f"Exception: {type(e).__name__}",
+                            initial_rank=self._state.initial_rank,
                             iteration=self._iteration,
                         )
 
@@ -719,6 +782,21 @@ class Wrapper:
             reason: Reason for the restart
             error: The exception that caused the restart, if any
         """
+        # Determine who failed if possible
+        failed_rank = None
+        if self._restart_coordinator:
+             info = self._restart_coordinator.get_restart_info(self._state.restart_attempt)
+             if info:
+                 # rank, initial_rank, iteration, reason
+                 failed_rank, failed_initial_rank, _, _ = info
+                 
+                 # If we have initial_rank, mark it as terminated
+                 if failed_initial_rank >= 0:
+                     logger.warning(f"Rank {self.rank}: Detected failure of initial_rank {failed_initial_rank}")
+                     self._terminated_ranks.add(failed_initial_rank)
+                 else:
+                     logger.warning(f"Rank {self.rank}: Could not determine initial_rank of failed rank {failed_rank}")
+
         # Record the fault
         self.record_fault(reason, error)
 
@@ -790,6 +868,7 @@ class Wrapper:
                 attempt=self._state.restart_attempt,
                 rank=self.rank,
                 reason=reason,
+                initial_rank=self._state.initial_rank,
                 iteration=self._iteration,
             )
             logger.info(
