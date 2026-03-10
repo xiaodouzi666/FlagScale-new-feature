@@ -2,6 +2,7 @@
 Straggler detection report structures and serialization.
 """
 
+import json
 from typing import Any, Dict, List, Optional
 
 
@@ -114,6 +115,15 @@ class StragglerReport:
                             lines.append(f"    {key}: {value}")
 
         return "\n".join(lines)
+
+    def print_report(self):
+        """Print the formatted report to stdout."""
+        print(self.to_text(), flush=True)
+
+    def save(self, filepath: str):
+        """Save the report as JSON."""
+        with open(filepath, "w") as f:
+            json.dump(self.to_dict(), f, indent=2)
 
     def identify_stragglers(self, threshold: float = 1.5) -> List[int]:
         """

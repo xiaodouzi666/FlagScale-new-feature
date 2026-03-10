@@ -140,31 +140,45 @@ from megatron.training.fs_theoretical_memory_usage import report_theoretical_mem
 from megatron.plugin.hetero.parallel_context import get_parallel_context
 
 ########## FlagScale Begin ##########
-from flagscale.runner.straggler import StragglerConfig, StragglerDetector
+from flagscale.runner.straggler import StragglerConfig as FSStragglerConfig
+from flagscale.runner.straggler import StragglerDetector as FSStragglerDetector
 from flagscale.runner.straggler.section import OptionalSectionContext
 import socket
 import os
 
 _fs_straggler_detector = None
 
+
+def _is_fs_straggler_requested(args):
+    return bool(
+        getattr(args, 'enable_straggler_detection', False)
+        or getattr(args, 'log_straggler', False)
+    )
+
+
 def get_fs_straggler_detector():
     global _fs_straggler_detector
     if _fs_straggler_detector is None:
         args = get_args()
-        if getattr(args, 'log_straggler', False):
+        if _is_fs_straggler_requested(args):
             import torch.distributed as dist
             world_size = dist.get_world_size() if dist.is_initialized() else 1
             rank = dist.get_rank() if dist.is_initialized() else 0
-            
+
             node_name = socket.gethostname() or f"node-{rank}"
-            
-            config = StragglerConfig(
+
+            config = FSStragglerConfig(
                 enabled=not getattr(args, 'disable_straggler_on_startup', False),
                 profiling_interval=getattr(args, 'straggler_profiling_interval', 10),
                 report_interval_steps=getattr(args, 'straggler_report_interval', 100),
                 straggler_threshold=getattr(args, 'straggler_threshold', 1.5),
+                warmup_steps=getattr(args, 'straggler_warmup_steps', 10),
+                monitor_sections=(
+                    getattr(args, 'straggler_monitor_sections', None)
+                    or ["forward_backward", "optimizer"]
+                ),
             )
-            _fs_straggler_detector = StragglerDetector(
+            _fs_straggler_detector = FSStragglerDetector(
                 config=config,
                 rank=rank,
                 world_size=world_size,
@@ -1627,8 +1641,11 @@ def train_step(forward_step_func, data_iterator, model, optimizer, opt_param_sch
                     optim_instance._copy_main_params_to_param_buffer()
 
         # Forward pass.
+        profile_step = getattr(args, "curr_iteration", 0) + 1
         fs_straggler = get_fs_straggler_detector()
-        enabled = fs_straggler is not None and fs_straggler.enabled
+        if fs_straggler is not None:
+            fs_straggler.current_step = profile_step
+        enabled = fs_straggler is not None and fs_straggler.should_profile(profile_step)
 
         with OptionalSectionContext(fs_straggler, "forward_backward", enabled=enabled):
             losses_reduced = forward_backward_func(
@@ -1670,7 +1687,7 @@ def train_step(forward_step_func, data_iterator, model, optimizer, opt_param_sch
     # Update parameters.
 
     fs_straggler = get_fs_straggler_detector()
-    enabled = fs_straggler is not None and fs_straggler.enabled
+    enabled = fs_straggler is not None and fs_straggler.should_profile(profile_step)
 
     timers('optimizer', log_level=1).start(barrier=args.barrier_with_L1_time)
     with OptionalSectionContext(fs_straggler, "optimizer", enabled=enabled):
@@ -2192,8 +2209,13 @@ def post_training_step_callbacks(
 
     # Straggler detector.
     if iteration % args.log_interval == 0 and args.log_straggler:
-        stimer.report(num_floating_point_operations_since_last_log_event, args.log_interval)
-        num_floating_point_operations_since_last_log_event = 0.0
+        main_module = sys.modules.get("__main__")
+        legacy_stimer = getattr(main_module, "stimer", None) if main_module is not None else None
+        if legacy_stimer is not None:
+            legacy_stimer.report(
+                num_floating_point_operations_since_last_log_event, args.log_interval
+            )
+            num_floating_point_operations_since_last_log_event = 0.0
 
     # Check weight hash across DP replicas.
     if (
@@ -2763,7 +2785,7 @@ def train(
             fs_straggler.current_step = iteration
             if fs_straggler.should_report():
                 report = fs_straggler.generate_report()
-                if torch.distributed.get_rank() == 0:
+                if not torch.distributed.is_initialized() or torch.distributed.get_rank() == 0:
                     report.print_report()
                     log_dir = getattr(args, 'straggler_log_dir', None)
                     if log_dir is not None:

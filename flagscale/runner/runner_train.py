@@ -118,6 +118,15 @@ def _update_config_train(config: DictConfig):
         else os.path.join(exp_dir, "wandb")
     )
 
+    if system.get("enable_straggler_detection", False):
+        system.straggler_log_dir = (
+            resolve_path(system.straggler_log_dir, "straggler_log_dir")
+            if system.get("straggler_log_dir", None)
+            else os.path.join(system.logging.log_dir, "straggler")
+        )
+    elif system.get("straggler_log_dir", None):
+        system.straggler_log_dir = resolve_path(system.straggler_log_dir, "straggler_log_dir")
+
     # Tokenizer file paths — resolve before passing to the training subprocess,
     # which may run with a different cwd (e.g. site-packages when pip-installed).
     data = config.train.get("data", None)

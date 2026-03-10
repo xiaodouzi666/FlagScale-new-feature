@@ -3,6 +3,7 @@ Unit tests for straggler report module.
 """
 
 import json
+import os
 
 import pytest
 
@@ -336,3 +337,30 @@ class TestStragglerReportEdgeCases:
         result = report.to_dict()
 
         assert result["timestamp"] == 1234567890.0
+
+    def test_print_report(self, capsys):
+        """Test print_report delegates to text formatting."""
+        report = StragglerReport(step=12)
+
+        report.print_report()
+
+        captured = capsys.readouterr()
+        assert "Step 12" in captured.out
+
+    def test_save_report_json(self, tmp_path):
+        """Test save writes a JSON file."""
+        report = StragglerReport(
+            step=7,
+            section_scores={"forward_backward": {0: 0.1}},
+            straggler_ranks=[0],
+        )
+
+        output_path = tmp_path / "report.json"
+        report.save(str(output_path))
+
+        assert os.path.exists(output_path)
+        with open(output_path, "r") as f:
+            saved = json.load(f)
+
+        assert saved["step"] == 7
+        assert saved["straggler_ranks"] == [0]

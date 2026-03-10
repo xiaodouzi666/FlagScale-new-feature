@@ -1734,10 +1734,24 @@ def _add_network_size_args(parser):
 
 def _add_straggler_detector_args(parser):
     group = parser.add_argument_group(title='straggler')
+    group.add_argument('--enable-straggler-detection', action='store_true',
+                       help='Enable FlagScale straggler detection and reporting.')
     group.add_argument('--log-straggler', action='store_true',
                        help='If set, tracks and logs straggler per GPU.')
     group.add_argument('--disable-straggler-on-startup', action='store_true',
                        help='If set, StragglerDetector is disabled on startup.')
+    group.add_argument('--straggler-profiling-interval', type=int, default=10,
+                       help='Profile one training step every N steps for FlagScale straggler reporting.')
+    group.add_argument('--straggler-report-interval', type=int, default=100,
+                       help='Generate one FlagScale straggler report every N completed steps.')
+    group.add_argument('--straggler-threshold', type=float, default=1.5,
+                       help='Relative slowdown threshold used to classify stragglers.')
+    group.add_argument('--straggler-log-dir', type=str, default=None,
+                       help='Directory used to persist FlagScale straggler JSON reports.')
+    group.add_argument('--straggler-warmup-steps', type=int, default=10,
+                       help='Number of initial steps to skip before FlagScale straggler sampling starts.')
+    group.add_argument('--straggler-monitor-sections', nargs='+', default=None,
+                       help='Optional list of section names to include in FlagScale straggler monitoring.')
     group.add_argument('--straggler-ctrlr-port', type=int, default=65535,
                        help='Port number to toggle StragglerDetector on/off at runtime')
     group.add_argument('--straggler-minmax-count', type=int, default=1,
@@ -3469,10 +3483,24 @@ def _add_sft_args(parser):
 
 def _add_straggler_detector_args(parser):
     group = parser.add_argument_group(title='straggler')
+    group.add_argument('--enable-straggler-detection', action='store_true',
+                       help='Enable FlagScale straggler detection and reporting.')
     group.add_argument('--log-straggler', action='store_true',
                        help='If set, tracks and logs straggler per GPU.')
     group.add_argument('--disable-straggler-on-startup', action='store_true',
                        help='If set, straggler detector is disabled until externally enabled.')
+    group.add_argument('--straggler-profiling-interval', type=int, default=10,
+                       help='Profile one training step every N steps for FlagScale straggler reporting.')
+    group.add_argument('--straggler-report-interval', type=int, default=100,
+                       help='Generate one FlagScale straggler report every N completed steps.')
+    group.add_argument('--straggler-threshold', type=float, default=1.5,
+                       help='Relative slowdown threshold used to classify stragglers.')
+    group.add_argument('--straggler-log-dir', type=str, default=None,
+                       help='Directory used to persist FlagScale straggler JSON reports.')
+    group.add_argument('--straggler-warmup-steps', type=int, default=10,
+                       help='Number of initial steps to skip before FlagScale straggler sampling starts.')
+    group.add_argument('--straggler-monitor-sections', nargs='+', default=None,
+                       help='Optional list of section names to include in FlagScale straggler monitoring.')
     group.add_argument('--straggler-ctrlr-port', type=int, default=65535,
                        help='Port used by straggler controller to listen on.')
     group.add_argument('--straggler-minmax-count', type=int, default=1,
