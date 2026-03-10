@@ -139,7 +139,39 @@ from megatron.training.global_vars import get_spiky_loss_detector
 from megatron.training.fs_theoretical_memory_usage import report_theoretical_memory as fs_report_theoretical_memory
 from megatron.plugin.hetero.parallel_context import get_parallel_context
 
-stimer = StragglerDetector()
+########## FlagScale Begin ##########
+from flagscale.runner.straggler import StragglerConfig, StragglerDetector
+from flagscale.runner.straggler.section import OptionalSectionContext
+import socket
+import os
+
+_fs_straggler_detector = None
+
+def get_fs_straggler_detector():
+    global _fs_straggler_detector
+    if _fs_straggler_detector is None:
+        args = get_args()
+        if getattr(args, 'log_straggler', False):
+            import torch.distributed as dist
+            world_size = dist.get_world_size() if dist.is_initialized() else 1
+            rank = dist.get_rank() if dist.is_initialized() else 0
+            
+            node_name = socket.gethostname() or f"node-{rank}"
+            
+            config = StragglerConfig(
+                enabled=not getattr(args, 'disable_straggler_on_startup', False),
+                profiling_interval=getattr(args, 'straggler_profiling_interval', 10),
+                report_interval_steps=getattr(args, 'straggler_report_interval', 100),
+                straggler_threshold=getattr(args, 'straggler_threshold', 1.5),
+            )
+            _fs_straggler_detector = StragglerDetector(
+                config=config,
+                rank=rank,
+                world_size=world_size,
+                node_name=node_name
+            )
+    return _fs_straggler_detector
+########## FlagScale End ##########
 
 from megatron.core.msc_utils import MultiStorageClientFeature, open_file
 
@@ -1595,17 +1627,21 @@ def train_step(forward_step_func, data_iterator, model, optimizer, opt_param_sch
                     optim_instance._copy_main_params_to_param_buffer()
 
         # Forward pass.
-        losses_reduced = forward_backward_func(
-            forward_step_func=forward_step_func,
-            data_iterator=data_iterator,
-            model=model,
-            num_microbatches=get_num_microbatches(),
-            seq_length=args.seq_length,
-            micro_batch_size=args.micro_batch_size,
-            decoder_seq_length=args.decoder_seq_length,
-            forward_only=False,
-            adjust_tensor_shapes_fn=adjust_tensor_shapes_fn,
-        )
+        fs_straggler = get_fs_straggler_detector()
+        enabled = fs_straggler is not None and fs_straggler.enabled
+
+        with OptionalSectionContext(fs_straggler, "forward_backward", enabled=enabled):
+            losses_reduced = forward_backward_func(
+                forward_step_func=forward_step_func,
+                data_iterator=data_iterator,
+                model=model,
+                num_microbatches=get_num_microbatches(),
+                seq_length=args.seq_length,
+                micro_batch_size=args.micro_batch_size,
+                decoder_seq_length=args.decoder_seq_length,
+                forward_only=False,
+                adjust_tensor_shapes_fn=adjust_tensor_shapes_fn,
+            )
     should_checkpoint, should_exit, exit_code = rerun_state_machine.should_checkpoint_and_exit()
     if should_exit:
         return {}, True, should_checkpoint, should_exit, exit_code, None, None
@@ -1633,8 +1669,12 @@ def train_step(forward_step_func, data_iterator, model, optimizer, opt_param_sch
 
     # Update parameters.
 
+    fs_straggler = get_fs_straggler_detector()
+    enabled = fs_straggler is not None and fs_straggler.enabled
+
     timers('optimizer', log_level=1).start(barrier=args.barrier_with_L1_time)
-    update_successful, grad_norm, num_zeros_in_grad = optimizer.step()
+    with OptionalSectionContext(fs_straggler, "optimizer", enabled=enabled):
+        update_successful, grad_norm, num_zeros_in_grad = optimizer.step()
     timers('optimizer').stop()
 
     # when freezing sub-models we may have a mixture of successful and unsucessful ranks,
@@ -2465,18 +2505,7 @@ def train(
         gc.collect()
 
     # Singleton initialization of straggler detector.
-    if args.log_straggler:
-        global stimer
-        world = torch.distributed.get_world_size()
-        rank = torch.distributed.get_rank()
-        mmcnt = args.straggler_minmax_count
-        stimer.configure(
-            world,
-            rank,
-            mmcnt=mmcnt,
-            enabled=not args.disable_straggler_on_startup,
-            port=args.straggler_ctrlr_port,
-        )
+    fs_straggler = get_fs_straggler_detector()
     num_floating_point_operations_since_last_log_event = 0.0
 
     num_microbatches = get_num_microbatches()
@@ -2727,6 +2756,19 @@ def train(
         num_floating_point_operations_in_batch = num_floating_point_operations(args, batch_size)
         num_floating_point_operations_so_far += num_floating_point_operations_in_batch
         num_floating_point_operations_since_last_log_event += num_floating_point_operations_in_batch
+
+        # Straggler detector reporting.
+        fs_straggler = get_fs_straggler_detector()
+        if fs_straggler is not None and fs_straggler.enabled:
+            fs_straggler.current_step = iteration
+            if fs_straggler.should_report():
+                report = fs_straggler.generate_report()
+                if torch.distributed.get_rank() == 0:
+                    report.print_report()
+                    log_dir = getattr(args, 'straggler_log_dir', None)
+                    if log_dir is not None:
+                        os.makedirs(log_dir, exist_ok=True)
+                        report.save(os.path.join(log_dir, f"report_step_{iteration}.json"))
 
         # Logging.
         if not optimizer.is_stub_optimizer:

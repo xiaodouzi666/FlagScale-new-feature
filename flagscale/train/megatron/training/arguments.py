@@ -96,6 +96,7 @@ def parse_args(extra_args_provider=None, ignore_unknown_args=False):
 
     parser = add_megatron_arguments(parser)
     parser = add_flagscale_arguments(parser)
+    parser = _add_straggler_detector_args(parser)
 
     # Custom arguments.
     if extra_args_provider is not None:
@@ -3464,4 +3465,16 @@ def _add_sft_args(parser):
     group.add_argument('--sft', action="store_true", help='Megatron SFT training')
     group.add_argument('--sft-tokenizer-prompt-format', type=str, default="nemotron-h-aligned", 
                        help='SFT prompt format.')
+    return parser
+
+def _add_straggler_detector_args(parser):
+    group = parser.add_argument_group(title='straggler')
+    group.add_argument('--log-straggler', action='store_true',
+                       help='If set, tracks and logs straggler per GPU.')
+    group.add_argument('--disable-straggler-on-startup', action='store_true',
+                       help='If set, straggler detector is disabled until externally enabled.')
+    group.add_argument('--straggler-ctrlr-port', type=int, default=65535,
+                       help='Port used by straggler controller to listen on.')
+    group.add_argument('--straggler-minmax-count', type=int, default=1,
+                       help='Number of min and max ranked straggler to report.')
     return parser
