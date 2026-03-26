@@ -138,12 +138,18 @@ def _update_config_train(config: DictConfig):
         if config.logging.get("log_dir", None)
         else os.path.join(exp_dir, "logs")
     )
+    straggler_log_dir = (
+        os.path.abspath(config.get("straggler_log_dir"))
+        if config.get("straggler_log_dir", None)
+        else os.path.join(log_dir, "straggler")
+    )
     scripts_dir = os.path.join(log_dir, "scripts")
     pids_dir = os.path.join(log_dir, "pids")
     details_dir = os.path.join(log_dir, "details")
 
     config.checkpoint.save = ckpt_save_dir
     config.checkpoint.load = ckpt_load_dir
+    config.straggler_log_dir = straggler_log_dir
     config.logging.log_dir = log_dir
     config.logging.scripts_dir = scripts_dir
     config.logging.pids_dir = pids_dir
@@ -266,6 +272,7 @@ def _generate_run_script_train(
         f.write(f"mkdir -p {system_config.logging.details_dir}\n")
         f.write(f"mkdir -p {system_config.logging.tensorboard_dir}\n")
         f.write(f"mkdir -p {system_config.logging.wandb_save_dir}\n")
+        f.write(f"mkdir -p {system_config.straggler_log_dir}\n")
         f.write(f"\n")
         f.write(f"cd {root_dir}\n")
         f.write(f"\n")
