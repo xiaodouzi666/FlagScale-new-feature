@@ -34,6 +34,29 @@ from flagscale.runner.utils import (
 )
 
 _MAX_CPU_COUNT = multiprocessing.cpu_count()
+_RUNNER_ONLY_KEYS = {
+    "type",
+    "backend",
+    "per_node_task",
+    "hostfile",
+    "ssh_port",
+    "master_addr",
+    "master_port",
+    "enable_monitoring",
+    "enable_gpu_health_check",
+    "nsys_bin_path",
+    "nsys_rep_file_path",
+    "deploy",
+    "enable_perf_monitor",
+    "perf_log_interval",
+    "perf_log_dir",
+    "perf_console_output",
+    "perf_log_format",
+    "perf_memory_tracking",
+    "perf_breakdown",
+    "perf_max_log_files",
+    "perf_model_type",
+}
 
 
 def _get_profile_args(config, backend="vllm"):
@@ -91,31 +114,8 @@ def _get_runner_cmd_train(
     tee = runner_config.get("tee", "3")
 
     runner_args = OmegaConf.to_container(runner_config, resolve=True)
-    if "type" in runner_args:
-        del runner_args["type"]
-    if "backend" in runner_args:
-        del runner_args["backend"]
-    if "per_node_task" in runner_args:
-        del runner_args["per_node_task"]
-    if "hostfile" in runner_args:
-        del runner_args["hostfile"]
-    if "ssh_port" in runner_args:
-        del runner_args["ssh_port"]
-    if "master_addr" in runner_args:
-        del runner_args["master_addr"]
-    if "master_port" in runner_args:
-        del runner_args["master_port"]
-    if "enable_monitoring" in runner_args:
-        del runner_args["enable_monitoring"]
-    if "enable_gpu_health_check" in runner_args:
-        del runner_args["enable_gpu_health_check"]
-    # Profiling options are consumed by launcher; torchrun doesn't accept them.
-    if "nsys_bin_path" in runner_args:
-        del runner_args["nsys_bin_path"]
-    if "nsys_rep_file_path" in runner_args:
-        del runner_args["nsys_rep_file_path"]
-    if "deploy" in runner_args:
-        del runner_args["deploy"]
+    for key in _RUNNER_ONLY_KEYS:
+        runner_args.pop(key, None)
     runner_args["rdzv_id"] = rdzv_id
     # runner_args["master_addr"] = master_addr
     # runner_args["master_port"] = master_port

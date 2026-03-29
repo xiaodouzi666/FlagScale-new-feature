@@ -1,0 +1,34 @@
+defaults:
+  - train: small
+  - _self_
+
+experiment:
+  exp_name: gpt2
+  seed: 1234
+  exp_dir: ./outputs_gpt2
+  task:
+    type: train
+    backend: megatron
+    entrypoint: flagscale/train/megatron/train_gpt.py
+  cmds:
+    before_start: source /root/miniconda3/bin/activate flagscale-train
+  runner:
+    backend: torchrun
+    nnodes: 1
+    nproc_per_node: 8
+    per_node_task: false
+    no_shared_fs: false
+    hostfile: null
+    master_port: 25114
+    ssh_port: 14112
+    master_addr: 127.0.0.1
+    rdzv_backend: static
+  envs:
+    CUDA_VISIBLE_DEVICES: 0,1,2,3,4,5,6,7
+    CUDA_DEVICE_MAX_CONNECTIONS: 1
+
+action: run
+
+hydra:
+  run:
+    dir: ${experiment.exp_dir}/hydra
