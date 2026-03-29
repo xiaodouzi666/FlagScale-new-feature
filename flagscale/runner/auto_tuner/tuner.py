@@ -23,7 +23,7 @@ from flagscale.runner.auto_tuner.record.recorder import Recorder, ServeRecorder
 from flagscale.runner.auto_tuner.search.searcher import Searcher, ServeSearcher
 from flagscale.runner.runner_base import JobStatus
 from flagscale.runner.runner_serve import SSHServeRunner
-from flagscale.runner.runner_train import SSHTrainRunner
+from flagscale.runner.runner_train import SSHTrainRunner, _resolve_enable_monitoring
 from flagscale.runner.utils import parse_hostfile
 
 
@@ -239,7 +239,7 @@ class AutoTuner:
             best_task = self.generator.gen_best_task(best_strategy, self.orig_config)
             best_task.action = "run"
             runner = SSHTrainRunner(best_task)
-            enable_monitoring = best_task.experiment.runner.get("enable_monitoring", False)
+            enable_monitoring = _resolve_enable_monitoring(best_task.experiment.runner)
             runner.run(monitor=True, interval=60, enable_monitoring=enable_monitoring)
 
     def need_stop(self):
@@ -297,7 +297,7 @@ class AutoTuner:
         if task is None:
             task = self.cur_task
         self.runner = SSHTrainRunner(task)
-        enable_monitoring = task.experiment.runner.get("enable_monitoring", False)
+        enable_monitoring = _resolve_enable_monitoring(task.experiment.runner)
         self.runner.run(enable_monitoring=enable_monitoring)
         # set start time
         self.task_start_time = time.time()

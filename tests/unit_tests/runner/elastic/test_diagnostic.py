@@ -1,20 +1,33 @@
 import os
 import tempfile
 
-from unittest.mock import MagicMock, mock_open, patch
+from unittest.mock import mock_open, patch
 
 import pytest
+from omegaconf import OmegaConf
 
-from flagscale.runner.elastic.diagnostic import error_types, generate_diagnostic_report
+from flagscale.runner.elastic.diagnostic import (
+    _diagnostic_offsets,
+    error_types,
+    generate_diagnostic_report,
+)
 
 
 class TestDiagnostic:
     """Test cases for diagnostic module"""
 
+    @pytest.fixture(autouse=True)
+    def reset_offsets(self):
+        _diagnostic_offsets.clear()
+        yield
+        _diagnostic_offsets.clear()
+
     @pytest.fixture
-    def mock_config(self):
+    def mock_config(self, tmp_path):
         """Mock config object"""
-        return MagicMock()
+        return OmegaConf.create(
+            {"train": {"system": {"logging": {"log_dir": str(tmp_path / "logs")}}}}
+        )
 
     @pytest.fixture
     def sample_log_content(self):
@@ -41,9 +54,30 @@ class TestDiagnostic:
             'traceback (most recent call last)',
             'cuda error',
             'hanging',
+            'mxkw',
         ]
         for key in expected_keys:
             assert key in error_types
+
+    def test_generate_diagnostic_report_with_metax_errors(self, mock_config):
+        content = """
+        [MXKW][E]queues.c: ioctl create queue block timeout, gpu_id:64858 type:21. Retrying.
+        RuntimeError: MACA out of memory
+        """
+
+        with tempfile.NamedTemporaryFile(mode='w', delete=False) as f:
+            f.write(content)
+            temp_path = f.name
+
+        try:
+            report = generate_diagnostic_report(
+                mock_config, "localhost", 0, temp_path, return_content=True
+            )
+
+            assert "DeviceQueueTimeout" in report
+            assert "OutOfMemoryError" in report
+        finally:
+            os.unlink(temp_path)
 
     def test_generate_diagnostic_report_empty_file(self, mock_config):
         """Test that report's format"""

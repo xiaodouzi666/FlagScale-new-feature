@@ -13,6 +13,7 @@ error_types = {
     "out of memory": "OutOfMemoryError: The training process ran out of GPU memory.",
     "outofmemoryerror": "OutOfMemoryError: The training process ran out of GPU memory.",
     "cuda out of memory": "OutOfMemoryError: CUDA out of memory error occurred.",
+    "maca out of memory": "OutOfMemoryError: MACA out of memory error occurred.",
     # Connection and network errors
     "rendezvousconnectionerror": "RendezvousConnectionError: Connection to rendezvous backend failed.",
     "connection refused": "ConnectionError: Network connection refused.",
@@ -36,6 +37,8 @@ error_types = {
     "cuda error": "CUDAError: CUDA-related error occurred.",
     "cudnn error": "CUDNNError: CuDNN library error occurred.",
     "gpu error": "GPUError: GPU-related error occurred.",
+    "mxkw": "GPUDriverError: Metax driver error occurred.",
+    "ioctl create queue block timeout": "DeviceQueueTimeout: Metax device queue creation timed out.",
     # File and storage errors
     "no such file or directory": "FileNotFound: Required file or directory not found.",
     "permission denied": "PermissionError: File permission denied.",

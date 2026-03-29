@@ -27,6 +27,30 @@ from flagscale.runner.utils import (
 _MAX_CPU_COUNT = multiprocessing.cpu_count()
 
 
+def _as_bool(value):
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "on"}
+    return bool(value)
+
+
+def _resolve_enable_monitoring(runner_config):
+    """Resolve monitor enablement with backward-compatible aliases."""
+
+    if runner_config.get("enable_monitoring", None) is not None:
+        return _as_bool(runner_config.get("enable_monitoring"))
+    return _as_bool(runner_config.get("enable_perf_monitor", False))
+
+
+def _resolve_monitor_interval(runner_config, default=5):
+    """Resolve monitor interval with backward-compatible aliases."""
+
+    if runner_config.get("monitor_interval", None) is not None:
+        return int(runner_config.get("monitor_interval"))
+    if runner_config.get("perf_monitor_interval", None) is not None:
+        return int(runner_config.get("perf_monitor_interval"))
+    return default
+
+
 def _get_args_megatron(config: DictConfig):
     assert (
         config.experiment.task.backend == "megatron"
@@ -203,6 +227,12 @@ def _get_runner_cmd_train(
         del runner_args["master_port"]
     if "enable_monitoring" in runner_args:
         del runner_args["enable_monitoring"]
+    if "enable_perf_monitor" in runner_args:
+        del runner_args["enable_perf_monitor"]
+    if "monitor_interval" in runner_args:
+        del runner_args["monitor_interval"]
+    if "perf_monitor_interval" in runner_args:
+        del runner_args["perf_monitor_interval"]
     runner_args["rdzv_id"] = rdzv_id
     # runner_args["master_addr"] = master_addr
     # runner_args["master_port"] = master_port
@@ -236,6 +266,7 @@ def _generate_run_script_train(
     with_test=False,
     root_dir=None,
     enable_monitoring=False,
+    monitor_interval=5,
 ):
     system_config = config.train.system
     logging_config = config.train.system.logging
@@ -293,7 +324,7 @@ def _generate_run_script_train(
             f.write(f'  --node-rank {node_rank} \\\n')
             f.write(f'  {"--no-shared-fs" if no_shared_fs else ""} \\\n')
             f.write(f'  --ssh-port {ssh_port} \\\n')
-            f.write(f'  --interval 5 \\\n')
+            f.write(f'  --interval {int(monitor_interval)} \\\n')
             f.write(f'  --enable-log-collection \\\n')
             f.write(f'  --enable-diagnostic \\\n')
             f.write(f'  > /tmp/monitor_output_{node_rank}_{host}.log 2>&1 &\n')
@@ -367,6 +398,8 @@ def run_node(
     available_port,
     with_test,
     dryrun,
+    enable_monitoring,
+    monitor_interval,
 ):
     cur_envs = update_nodes_envs(user_envs, host, resource_info)
     # Get the number of visible devices from the environment variable, e.g. CUDA_VISIBLE_DEVICES, MLU_VISIBLE_DEVICES
@@ -391,6 +424,8 @@ def run_node(
         with_test=with_test,
         dryrun=dryrun,
         cur_envs=cur_envs,
+        enable_monitoring=enable_monitoring,
+        monitor_interval=monitor_interval,
     )
 
 
@@ -430,7 +465,8 @@ class SSHTrainRunner(RunnerBase):
         with_test=False,
         dryrun=False,
         cur_envs=None,
-        enable_monitoring=True,
+        enable_monitoring=False,
+        monitor_interval=5,
     ):
         export_cmd = []
 
@@ -468,6 +504,7 @@ class SSHTrainRunner(RunnerBase):
             with_test=with_test,
             root_dir=node_specific_config.get("build_dir", None),
             enable_monitoring=enable_monitoring,
+            monitor_interval=monitor_interval,
         )
 
         if host != "localhost":
@@ -492,7 +529,8 @@ class SSHTrainRunner(RunnerBase):
     ):
         # Read from config if not explicitly provided
         if enable_monitoring is None:
-            enable_monitoring = self.config.experiment.runner.get("enable_monitoring", False)
+            enable_monitoring = _resolve_enable_monitoring(self.config.experiment.runner)
+        monitor_interval = _resolve_monitor_interval(self.config.experiment.runner)
 
         num_visible_devices = None
         runner_config = self.config.experiment.runner
@@ -522,6 +560,8 @@ class SSHTrainRunner(RunnerBase):
                         available_port,
                         with_test,
                         dryrun,
+                        enable_monitoring,
+                        monitor_interval,
                     )
                     tasks.append(args)
                 pool.starmap(run_node, tasks)
@@ -546,6 +586,7 @@ class SSHTrainRunner(RunnerBase):
                 dryrun=dryrun,
                 cur_envs=self.user_envs,
                 enable_monitoring=enable_monitoring,
+                monitor_interval=monitor_interval,
             )
         # If need monitor, query status continually
         if monitor:

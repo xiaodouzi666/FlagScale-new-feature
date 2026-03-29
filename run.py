@@ -9,7 +9,11 @@ from flagscale.runner.runner_compress import SSHCompressRunner
 from flagscale.runner.runner_inference import SSHInferenceRunner
 from flagscale.runner.runner_rl import SSHRLRunner
 from flagscale.runner.runner_serve import CloudServeRunner, SSHServeRunner
-from flagscale.runner.runner_train import CloudTrainRunner, SSHTrainRunner
+from flagscale.runner.runner_train import (
+    CloudTrainRunner,
+    SSHTrainRunner,
+    _resolve_enable_monitoring,
+)
 from flagscale.runner.utils import is_master
 
 # To accommodate the scenario where the before_start field is used to switch to the actual environment during program execution,
@@ -48,7 +52,7 @@ def main(config: DictConfig) -> None:
                 raise ValueError(f"Unknown runner type {config.runner.type}")
 
             if config.action == "run":
-                enable_monitoring = config.experiment.runner.get("enable_monitoring", False)
+                enable_monitoring = _resolve_enable_monitoring(config.experiment.runner)
                 runner.run(enable_monitoring=enable_monitoring)
                 from flagscale.logger import logger
 
